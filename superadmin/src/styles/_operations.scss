@@ -171,6 +171,26 @@
   overflow-x: auto;
 }
 
+.live-jobs-scroll,
+.repair-table-scroll {
+  max-height: 360px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+
+  &:focus-visible {
+    outline: 2px solid var(--theme-1);
+    outline-offset: -2px;
+  }
+
+  thead th {
+    position: sticky;
+    z-index: 1;
+    top: 0;
+    background: var(--surface);
+  }
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

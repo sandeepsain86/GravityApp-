@@ -186,7 +186,7 @@
         </div>
       </div>
       <p class="customer-rating-note">Customer ratings are not in the current data feed; this view compares billed value, jobs, sites and AMC status.</p>
-      <div class="portfolio-list">
+      <div class="portfolio-list" role="region" aria-label="Scrollable customer portfolio" tabindex="0">
         @for (company of customerPerformance(); track company.name) {
           <div class="portfolio-row">
             <div class="portfolio-copy">
@@ -209,14 +209,14 @@
       <div class="panel-heading">
         <div>
           <h2>Provider leaderboard</h2>
-          <p>Star score ranks first, then experience and completed services</p>
+          <p>All Energy Hub providers · ranked by rating, experience and completed services</p>
         </div>
         <a class="panel-link" routerLink="/directory">Providers <span aria-hidden="true">→</span></a>
       </div>
       @if (loadingPlatformData()) {
         <p class="empty-state">Loading provider ratings…</p>
       } @else if (providerPerformance().length) {
-        <div class="provider-list">
+        <div class="provider-list" role="region" aria-label="Scrollable provider rankings" tabindex="0">
           @for (provider of providerPerformance(); track provider.registrationId) {
             <a class="provider-row" [attr.data-rank]="$index + 1" [routerLink]="['/directory', provider.id]">
               <span class="provider-rank" role="img" [attr.aria-label]="'Rank ' + ($index + 1)">
@@ -227,15 +227,18 @@
                 <small>{{ formatExperience(provider.profile.experienceYears) }} · {{ provider.profile.completedServices }} services</small>
               </span>
               <span class="provider-rating">
-                <span class="provider-stars" role="img" [attr.aria-label]="formatRating(provider.profile.rating) + ' out of 5'">
+                <span class="provider-stars" role="img"
+                  [attr.aria-label]="provider.profile.rating === null ? 'No saved rating' : formatRating(provider.profile.rating) + ' out of 5'">
                   @for (filled of provider.stars; track $index) {
                     <span [class.filled]="filled">★</span>
                   }
                 </span>
                 @if ((provider.profile.ratingCount ?? 0) > 0) {
                   <small>{{ provider.profile.ratingCount }} ratings</small>
-                } @else {
+                } @else if (provider.profile.rating !== null) {
                   <small>Saved profile score</small>
+                } @else {
+                  <small>No saved rating</small>
                 }
               </span>
               <strong class="provider-score">{{ formatRating(provider.profile.rating) }}</strong>
@@ -243,7 +246,7 @@
           }
         </div>
       } @else {
-        <p class="empty-state">No provider ratings are available in the live directory response.</p>
+        <p class="empty-state">No Energy Hub provider registrations are available in the live directory response.</p>
       }
     </article>
   }

@@ -148,6 +148,22 @@
         }
       </article>
 
+      <article class="content-card rating-card">
+        <div class="section-heading"><div><h2>Profile snapshot</h2><p>Registration and account health.</p></div></div>
+        <dl class="snapshot-list">
+          <div><dt>Registration ID</dt><dd>{{ person.registrationId }}</dd></div>
+          <div><dt>Registered address</dt><dd>{{ person.profile.registeredAddress || 'Not provided' }}</dd></div>
+          <div><dt>Account updated</dt><dd>{{ formatDate(data.account.updatedAt) }}</dd></div>
+          @if (person.app === 'energy-hub') {
+            <div><dt>Service radius</dt><dd>{{ data.account.travelRadiusKm === null ? 'Not recorded' : data.account.travelRadiusKm + ' km' }}</dd></div>
+            <div><dt>Availability</dt><dd>{{ person.profile.online === null ? 'Not tracked' : person.profile.online ? 'Online' : 'Offline' }}{{ person.profile.busy ? ' · On service' : '' }}</dd></div>
+          } @else {
+            <div><dt>Email verified</dt><dd>{{ data.account.emailVerified === null ? 'Not recorded' : data.account.emailVerified ? 'Yes' : 'No' }}</dd></div>
+            <div><dt>Phone verified</dt><dd>{{ data.account.phoneVerified === null ? 'Not recorded' : data.account.phoneVerified ? 'Yes' : 'No' }}</dd></div>
+          }
+        </dl>
+      </article>
+
       @if (person.app === 'energy-hub') {
         <article class="content-card current-work-card">
           <div class="section-heading">
@@ -208,21 +224,6 @@
         }
       </article>
 
-      <article class="content-card rating-card">
-        <div class="section-heading"><div><h2>Profile snapshot</h2><p>Registration and account health.</p></div></div>
-        <dl class="snapshot-list">
-          <div><dt>Registration ID</dt><dd>{{ person.registrationId }}</dd></div>
-          <div><dt>Registered address</dt><dd>{{ person.profile.registeredAddress || 'Not provided' }}</dd></div>
-          <div><dt>Account updated</dt><dd>{{ formatDate(data.account.updatedAt) }}</dd></div>
-          @if (person.app === 'energy-hub') {
-            <div><dt>Service radius</dt><dd>{{ data.account.travelRadiusKm === null ? 'Not recorded' : data.account.travelRadiusKm + ' km' }}</dd></div>
-            <div><dt>Availability</dt><dd>{{ person.profile.online === null ? 'Not tracked' : person.profile.online ? 'Online' : 'Offline' }}{{ person.profile.busy ? ' · On service' : '' }}</dd></div>
-          } @else {
-            <div><dt>Email verified</dt><dd>{{ data.account.emailVerified === null ? 'Not recorded' : data.account.emailVerified ? 'Yes' : 'No' }}</dd></div>
-            <div><dt>Phone verified</dt><dd>{{ data.account.phoneVerified === null ? 'Not recorded' : data.account.phoneVerified ? 'Yes' : 'No' }}</dd></div>
-          }
-        </dl>
-      </article>
     </section>
   }
 

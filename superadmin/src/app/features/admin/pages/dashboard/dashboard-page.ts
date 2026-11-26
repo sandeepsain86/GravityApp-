@@ -151,7 +151,7 @@ export class DashboardPage {
 
   readonly providerPerformance = computed(() =>
     this.registrations()
-      .filter((registration) => registration.profile.rating !== null)
+      .filter((registration) => registration.app === 'energy-hub')
       .map((registration) => ({
         ...registration,
         displayName: registration.profile.businessName ||
@@ -167,8 +167,7 @@ export class DashboardPage {
         (b.profile.rating ?? 0) - (a.profile.rating ?? 0) ||
         b.experienceValue - a.experienceValue ||
         b.profile.completedServices - a.profile.completedServices,
-      )
-      .slice(0, 5),
+      ),
   );
 
   readonly customerPerformance = computed(() => {
