@@ -106,14 +106,16 @@ const JobModel = {
    */
   claimOpenJob: async (id, partnerId, jobType = 'service', handle = db) => {
     const firstStage = (STAGE_FLOWS[jobType] || STAGE_FLOWS.service)[0];
+    const assignedAt = nowIso();
     const result = await handle.run(
       `UPDATE \`${TABLE}\`
           SET \`status\` = 'accepted',
               \`assigned_partner_id\` = ?,
               \`stage\` = ?,
+              \`assigned_at\` = ?,
               \`updated_at\` = ?
         WHERE \`id\` = ? AND \`status\` = 'open' AND \`assigned_partner_id\` IS NULL`,
-      [partnerId, firstStage, nowIso(), id]
+      [partnerId, firstStage, assignedAt, assignedAt, id]
     );
     return result.affectedRows > 0;
   },
@@ -148,6 +150,7 @@ const JobModel = {
       status: row.status,
       stage: row.stage,
       assignedPartnerId: row.assigned_partner_id,
+      assignedAt: row.assigned_at || null,
       scheduledAt: row.scheduled_at || null,
       slaDueAt: row.sla_due_at,
       slaPaused: !!row.sla_paused,

@@ -1,7 +1,7 @@
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const { publicUrl } = require('../../config/shared');
 const { env } = require('../../config/energy_service/env');
 const { pool } = require('../../config/energy_service/db');
 const routes = require('../../routes/energy_service/index');
@@ -55,7 +55,7 @@ function createApp() {
     if (isAttachmentUpload(req)) return next();
     return jsonSmall(req, res, next);
   });
-  app.use('/uploads', express.static(path.join(__dirname, '..', '..', '..', 'uploads', 'energy_service')));
+  app.use('/uploads', express.static(env.uploadsDir));
   app.use((req, res, next) => {
     if (req.attachmentUploadRateLimited) return next();
     return apiLimiter(req, res, next);
@@ -69,7 +69,7 @@ function createApp() {
         message: 'Service Admin Backend and database are running',
         data: {
           sms: smsService.smsStatus(),
-          hubApi: `http://127.0.0.1:${process.env.HUB_PORT || 3000}/api/v1`,
+          hubApi: publicUrl('/api/v1'),
         },
       });
     } catch (error) {

@@ -1,5 +1,7 @@
-const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '..', '..', '.env') });
+const {
+  getDatabaseConfig,
+  getPublicUploadsDir,
+} = require('../shared');
 
 function required(name) {
   const value = process.env[name];
@@ -24,35 +26,6 @@ function boolEnv(name, fallback) {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
   throw new Error(`${name} must be true or false.`);
-}
-
-function buildDatabaseUrl() {
-  if (process.env.DATABASE_URL && process.env.DATABASE_URL.trim() && !process.env.DATABASE_URL.trim().startsWith('sqlite')) {
-    return process.env.DATABASE_URL.trim();
-  }
-
-  const explicit = (process.env.SERVICE_DATABASE_URL || '').trim();
-  if (explicit) return explicit;
-
-  const serviceName = (process.env.SERVICE_DB_NAME || '').trim();
-  if (serviceName) {
-    const host = (process.env.SERVICE_DB_HOST || '127.0.0.1').trim();
-    const user = (process.env.SERVICE_DB_USER || 'postgres').trim();
-    const password = process.env.SERVICE_DB_PASSWORD || '';
-    const port = process.env.SERVICE_DB_PORT || '5432';
-    return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${serviceName}`;
-  }
-  const host = (process.env.DB_HOST || '').trim();
-  const name = (process.env.DB_NAME || '').trim();
-  const user = (process.env.DB_USER || '').trim();
-  const password = process.env.DB_PASSWORD || '';
-  const port = process.env.DB_PORT || '5432';
-  if (!host || !name || !user) {
-    throw new Error('Missing required environment variable: DATABASE_URL');
-  }
-  const encodedUser = encodeURIComponent(user);
-  const encodedPassword = encodeURIComponent(password);
-  return `postgresql://${encodedUser}:${encodedPassword}@${host}:${port}/${name}`;
 }
 
 const nodeEnv = process.env.NODE_ENV || 'development';
@@ -86,25 +59,6 @@ if (!['', 'dev', 'twilio'].includes(smsProvider)) {
   throw new Error('SMS_PROVIDER must be dev or twilio.');
 }
 
-const devFixedOtp = (process.env.DEV_FIXED_OTP || '').trim();
-if (devFixedOtp && !/^\d{6}$/.test(devFixedOtp)) {
-  throw new Error('DEV_FIXED_OTP must contain exactly 6 digits.');
-}
-if (nodeEnv === 'production' && devFixedOtp) {
-  throw new Error('DEV_FIXED_OTP cannot be set in production.');
-}
-
-const devLoginPhone = (process.env.DEV_LOGIN_PHONE || '').replace(/\D/g, '').slice(-10);
-if (process.env.DEV_LOGIN_PHONE && devLoginPhone.length !== 10) {
-  throw new Error('DEV_LOGIN_PHONE must be a 10-digit mobile number.');
-}
-if (nodeEnv === 'production' && devLoginPhone) {
-  throw new Error('DEV_LOGIN_PHONE cannot be set in production.');
-}
-if (devLoginPhone && !devFixedOtp) {
-  throw new Error('DEV_LOGIN_PHONE needs DEV_FIXED_OTP.');
-}
-
 const configuredOtpHashSecret = (process.env.OTP_HASH_SECRET || '').trim();
 const otpHashSecret = configuredOtpHashSecret || accessTokenSecret;
 if (otpHashSecret.length < 32) {
@@ -117,9 +71,11 @@ if (nodeEnv === 'production'
 
 const env = {
   nodeEnv,
-  port: intEnv('PORT', 3000, 1, 65535),
-  host: (process.env.HOST || '0.0.0.0').trim(),
-  databaseUrl: buildDatabaseUrl(),
+  port: intEnv('PORT', Number(required('PORT')), 1, 65535),
+  host: required('HOST'),
+  corsOrigin: required('CORS_ORIGIN'),
+  database: getDatabaseConfig(),
+  uploadsDir: getPublicUploadsDir(),
   accessTokenSecret,
   accessTokenTtlSeconds: intEnv('ACCESS_TOKEN_TTL_SECONDS', 900, 60, 1800),
   refreshTokenTtlDays: intEnv('REFRESH_TOKEN_TTL_DAYS', 7, 1, 30),
@@ -137,8 +93,6 @@ const env = {
   lockoutMinutes: intEnv('LOCKOUT_MINUTES', 15, 1, 1440),
   otpTtlSeconds: intEnv('OTP_TTL_SECONDS', 300, 60, 900),
   otpResendCooldownSeconds: intEnv('OTP_RESEND_COOLDOWN_SECONDS', 60, 0, 600),
-  devFixedOtp,
-  devLoginPhone,
   otpMaxAttempts: intEnv('OTP_MAX_ATTEMPTS', 5, 3, 10),
   otpMaxSendsPerHour: intEnv('OTP_MAX_SENDS_PER_HOUR', 5, 1, 20),
   otpHashSecret,

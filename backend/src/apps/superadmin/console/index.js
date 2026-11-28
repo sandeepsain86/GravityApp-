@@ -18,15 +18,10 @@ function createSuperadminConsole(options = {}) {
       if (!initializePromise) {
         initializePromise = (async () => {
           const { createSuperadminRouter } = await tsImport(apiModuleUrl, parentUrl);
-          const dataFile = options.dataFile
-            || process.env.SUPERADMIN_DATA_FILE
-            || path.resolve(__dirname, '../../../../data/superadmin-access-control.json');
-          const storage = options.storage
-            || (Object.prototype.hasOwnProperty.call(options, 'dataFile') ? 'json' : 'database');
           router.use(await createSuperadminRouter({
             bootstrap,
-            dataFile: path.resolve(dataFile),
-            storage,
+            storage: 'database',
+            sessionRepository: options.sessionRepository,
           }));
         })().catch((error) => {
           initializePromise = undefined;

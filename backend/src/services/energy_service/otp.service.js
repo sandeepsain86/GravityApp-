@@ -22,21 +22,13 @@ function hashOtp(identifier, purpose, otp) {
   return hmacSha256(env.otpHashSecret, `${identifier}:${purpose}:${otp}`);
 }
 
-// With DEV_LOGIN_PHONE set, only that number gets the fixed code; everyone else gets a real one.
-function isDevLoginPhone(identifier) {
-  if (!env.devLoginPhone) return false;
-  return String(identifier || '').replace(/\D/g, '').slice(-10) === env.devLoginPhone;
-}
-
-function generateOtp(identifier) {
-  if (env.devFixedOtp && (!env.devLoginPhone || isDevLoginPhone(identifier))) return env.devFixedOtp;
+function generateOtp() {
   return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
 
 async function sendOtp({ identifier, channel, purpose, userId, req }) {
   const normalizedPurpose = normalizePurpose(purpose);
-  const demo = isDevLoginPhone(identifier);
-  const latest = demo ? null : await otpModel.findLatest(identifier, normalizedPurpose);
+  const latest = await otpModel.findLatest(identifier, normalizedPurpose);
   if (latest) {
     const retryAt = new Date(latest.created_at).getTime() + env.otpResendCooldownSeconds * 1000;
     if (retryAt > Date.now()) {
@@ -51,7 +43,7 @@ async function sendOtp({ identifier, channel, purpose, userId, req }) {
   }
 
   const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  const recent = demo ? 0 : await otpModel.countRecentSends(identifier, normalizedPurpose, hourAgo);
+  const recent = await otpModel.countRecentSends(identifier, normalizedPurpose, hourAgo);
   if (recent >= env.otpMaxSendsPerHour) {
     await auditService.createAuditLog({
       action: 'auth.otp_rate_limited',

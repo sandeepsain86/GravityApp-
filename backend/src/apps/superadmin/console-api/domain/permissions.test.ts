@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  createDefaultPermissionMatrix,
+  createDefaultPermissionMatrixSync,
   hasPermission,
   validateRolePermissions,
 } from './permissions.js';
 
 test('default matrix gives superadmin full access and viewer read-only access', () => {
-  const matrix = createDefaultPermissionMatrix();
+  const matrix = createDefaultPermissionMatrixSync();
 
   assert.equal(hasPermission('superadmin', matrix, 'users', 'delete'), true);
   assert.equal(hasPermission('viewer', matrix, 'jobs', 'view'), true);
@@ -17,7 +17,7 @@ test('default matrix gives superadmin full access and viewer read-only access', 
 });
 
 test('permission updates must contain every page and action as booleans', () => {
-  const matrix = createDefaultPermissionMatrix();
+  const matrix = createDefaultPermissionMatrixSync();
   assert.equal(validateRolePermissions(matrix.admin), true);
 
   const invalid = structuredClone(matrix.admin);

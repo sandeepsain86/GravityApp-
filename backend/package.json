@@ -9,7 +9,7 @@
     "migrate": "node database/energy_service/migrate.js",
     "test:provider": "node src/scripts/energy_provider/smoke.js && node src/scripts/energy_provider/http.smoke.js",
     "test:service": "node --test --test-concurrency=1 tests/energy_service/unit/core.test.js tests/energy_service/unit/validators.test.js tests/energy_service/unit/rateLimit.test.js tests/energy_service/unit/customerStatus.test.js tests/energy_service/unit/serviceFlow.test.js tests/energy_service/unit/env.test.js",
-    "test:superadmin": "tsx --test src/apps/superadmin/console-api/domain/permissions.test.ts src/apps/superadmin/console-api/infrastructure/json-store.test.ts src/apps/superadmin/console-api/services/platform-directory.test.js src/apps/superadmin/console-api/http/api.test.ts tests/superadmin-console.integration.test.js",
+    "test:superadmin": "tsx --test src/apps/superadmin/console-api/domain/permissions.test.ts src/apps/superadmin/console-api/infrastructure/json-store.test.ts src/apps/superadmin/console-api/services/platform-directory.test.js src/apps/superadmin/console-api/services/operations-directory.test.js src/apps/superadmin/console-api/services/admin-job-assignment.test.js src/apps/superadmin/console-api/services/admin-repair-workflow.test.js src/apps/superadmin/console-api/services/admin-project-workflow.test.js src/apps/superadmin/console-api/http/api.test.ts tests/superadmin-console.integration.test.js",
     "test": "npm run test:superadmin && npm run test:provider && npm run test:service"
   },
   "license": "ISC",

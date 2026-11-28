@@ -14,15 +14,24 @@
 
 <div class="stat-grid">
   <div class="stat-card">
-    <span class="stat-label">Successful logins</span>
+    <span class="activity-kpi-head">
+      <span class="activity-kpi-icon menu-icon" data-icon="users" aria-hidden="true"></span>
+      <span class="stat-label">Successful logins</span>
+    </span>
     <span class="stat-value">{{ counts().logins }}</span>
   </div>
   <div class="stat-card">
-    <span class="stat-label">Failed logins</span>
+    <span class="activity-kpi-head">
+      <span class="activity-kpi-icon menu-icon" data-icon="warn" aria-hidden="true"></span>
+      <span class="stat-label">Failed logins</span>
+    </span>
     <span class="stat-value">{{ counts().failed }}</span>
   </div>
   <div class="stat-card">
-    <span class="stat-label">Administration changes</span>
+    <span class="activity-kpi-head">
+      <span class="activity-kpi-icon menu-icon" data-icon="gear" aria-hidden="true"></span>
+      <span class="stat-label">Administration changes</span>
+    </span>
     <span class="stat-value">{{ counts().changes }}</span>
   </div>
 </div>

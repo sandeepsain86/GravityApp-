@@ -1,6 +1,6 @@
 import { inject, Injectable, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { AdminApiService } from './admin-api.service';
+import { AdminApiService, type OperationAssignment } from './admin-api.service';
 import { AuthService } from './auth.service';
 import type { PageKey } from '../models/user.model';
 
@@ -10,12 +10,50 @@ export type JobStage = 'triage' | 'assigned' | 'scheduled' | 'on-site' | 'in-ser
 export type DisputeStatus = 'open' | 'investigating' | 'resolved';
 export type InvoiceType = 'customer' | 'partner';
 export type InvoiceStatus = 'paid' | 'unpaid' | 'overdue';
-export type ProjectStatus = 'requested' | 'in-production' | 'delivered';
+export type ProjectStatus =
+  | 'draft'
+  | 'submitted'
+  | 'under_review'
+  | 'clarification_required'
+  | 'approved'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled';
+
+export interface ProjectMilestone {
+  id: string;
+  title: string;
+  sequence: number;
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
+  plannedStart: string | null;
+  dueDate: string;
+  completedAt: string | null;
+  clientSignoffStatus: 'not_required' | 'pending' | 'approved' | 'rejected';
+  leadEngineerName: string | null;
+  budgetAmount: number | null;
+  materialCost: number | null;
+  partnerPayout: number | null;
+  billedAmount: number | null;
+}
+
+export interface ProjectStatusHistory {
+  oldStatus: string | null;
+  newStatus: string;
+  note: string | null;
+  changedAt: string;
+}
 
 export interface JobActivity {
   at: string;
   title: string;
   detail: string;
+}
+
+export interface JobStageHistory {
+  at: string;
+  fromStage: string | null;
+  toStage: string | null;
+  note: string | null;
 }
 
 export interface JobChecklistItem {
@@ -33,6 +71,12 @@ export interface Job {
   slaMinsLeft: number | null;
   amount: number;
   site: string;
+  companyAmc?: 'active' | 'expiring' | 'none';
+  companySiteCount?: number | null;
+  jobType?: string;
+  targetRole?: string;
+  partnerId?: string | null;
+  amountSource?: string | null;
   category?: string;
   priority?: JobPriority;
   requester?: string;
@@ -45,6 +89,20 @@ export interface Job {
   notes?: string;
   createdAt?: string;
   scheduledAt?: string;
+  assignedAt?: string;
+  slaDueAt?: string | null;
+  completedAt?: string | null;
+  rawStage?: string | null;
+  totalBill?: number | null;
+  payoutAmount?: number | null;
+  partsTotal?: number | null;
+  beforePhotoCount?: number;
+  afterPhotoCount?: number;
+  liveLocation?: { latitude: number; longitude: number; updatedAt: string | null } | null;
+  lastLocationAt?: string | null;
+  stageHistory?: JobStageHistory[];
+  latitude?: number | null;
+  longitude?: number | null;
   stage?: JobStage;
   checklist?: JobChecklistItem[];
   workNotes?: JobActivity[];
@@ -57,9 +115,27 @@ export interface Partner {
   type: 'service' | 'repairing' | 'panelmaker' | 'supplier';
   rating: number;
   jobsDone: number;
+  experienceYears?: string | null;
   online: boolean;
+  busy?: boolean;
   verified: boolean;
   city: string;
+  lastLocationAt?: string | null;
+  specializations?: string[];
+}
+
+export function jobSkillMatchCount(job: Job, partner: Partner): number {
+  const jobText = [job.category, job.service, job.issue, job.asset]
+    .filter(Boolean)
+    .join(' ')
+    .toLocaleLowerCase();
+  if (!jobText) return 0;
+  return (partner.specializations ?? []).filter((specialization) => {
+    const value = specialization.trim().toLocaleLowerCase();
+    if (!value) return false;
+    return jobText.includes(value) ||
+      value.split(/[^a-z0-9]+/).some((term) => term.length >= 4 && jobText.includes(term));
+  }).length;
 }
 
 export interface VerificationRequest {
@@ -81,6 +157,7 @@ export interface Dispute {
 }
 
 export interface Company {
+  id?: string;
   name: string;
   gst: string;
   sites: number;
@@ -88,6 +165,7 @@ export interface Company {
   amc: string;
   totalJobs: number;
   revenue: number;
+  lastActivityAt?: string | null;
 }
 
 export interface AmcContract {
@@ -129,21 +207,68 @@ export interface InventoryItem {
 
 export interface RepairTicket {
   id: string;
+  ticketNumber: string;
   device: string;
+  manufacturer: string;
+  model: string;
+  serialNumber: string;
+  assetNumber: string;
+  location: string;
+  clientName: string;
+  siteName: string;
+  amcStatus: string;
+  amcEndDate: string | null;
   partner: string | null;
-  stage: 'received' | 'diagnosis' | 'repairing' | 'qc' | 'delivered';
+  stage: 'draft' | 'received' | 'diagnosis' | 'quote_approval' | 'repairing' | 'qc_passed' | 'delivered' | 'cancelled';
+  status: string;
+  fault: string;
+  symptoms: string;
+  serviceType: string;
+  repairScope: string;
+  priority: string;
+  requestedTurnaround: string;
   inAt: string;
+  updatedAt: string | null;
+  completedAt: string | null;
   cost: number | null;
+  estimateRequired: boolean;
+  quoteApproved: boolean;
+  spareParts: Array<{ sku: string; name: string; quantity: number }>;
+  partRequests: Array<{
+    sku: string;
+    name: string;
+    quantity: number;
+    status: 'requested' | 'issued';
+    requestedAt: string;
+  }>;
+  benchPartnerId: string | null;
+  benchPartnerName: string | null;
+  diagnosisAt: string | null;
+  testRecord: boolean;
+  history: Array<{ status: string; remarks: string; at: string | null }>;
 }
 
 export interface ProjectRequest {
   id: string;
+  requestId: string;
   company: string;
   title: string;
   panels: string;
   status: ProjectStatus;
   eta: string;
   value: number | null;
+  currency: string;
+  site: string;
+  category: string;
+  projectType: string;
+  description: string;
+  requirements: string;
+  createdAt: string | null;
+  submittedAt: string | null;
+  completedAt: string | null;
+  details: Record<string, string | null>;
+  milestones: ProjectMilestone[];
+  statusHistory: ProjectStatusHistory[];
 }
 
 type SourceStatus = 'unknown' | 'loading' | 'connected' | 'not-connected' | 'error';
@@ -152,6 +277,7 @@ interface OperationsResponse<T> {
   items: T[];
   sourceStatus: 'connected' | 'not-connected';
   message?: string;
+  insights?: AnalyticsInsights;
 }
 
 interface JobsResponse {
@@ -161,9 +287,82 @@ interface JobsResponse {
 }
 
 export interface AnalyticsEvent {
+  id: string;
   at: string;
+  activityAt: string;
+  revenueAt: string | null;
   amount: number;
-  category: 'service' | 'repair' | 'amc' | 'ecart' | 'projects';
+  grossRevenue: number;
+  refundAmount: number;
+  refundAt: string | null;
+  payoutAmount: number;
+  pendingPayout: number;
+  paidPayout: number;
+  payoutAt: string | null;
+  category: 'SVC' | 'REP' | 'PANEL' | 'DEL' | 'AMC' | 'ORDERS' | 'OTHER';
+  kind: string;
+  status: string;
+  completedAt: string | null;
+  assignedAt?: string | null;
+  slaDueAt: string | null;
+  slaBreachAt: string | null;
+  slaBreached: boolean | null;
+  delayMinutes: number | null;
+  mttrMinutes: number | null;
+  dispatchMinutes: number | null;
+  partnerId: string | null;
+  partnerName: string | null;
+  partnerRating: number | null;
+  activeAmc: boolean | null;
+  issue: string | null;
+  oem: string | null;
+  expiresAt?: string | null;
+  estimatedBudget?: number | null;
+}
+
+export interface AnalyticsInsights {
+  pendingPayouts: number;
+  activeAmcContracts: number;
+  expiringAmcContracts: number;
+  openAmcRequests: number;
+  recurringAmcValue: number | null;
+  recurringAmcValueAvailable: boolean;
+  invoiceDataAvailable: boolean;
+  taxDataAvailable: boolean;
+  lowStockItems: Array<{
+    id: string;
+    name: string;
+    sku: string;
+    quantity: number;
+    reorderLevel: number;
+    recentJobsUsing: number;
+  }>;
+}
+
+const EMPTY_ANALYTICS_INSIGHTS: AnalyticsInsights = {
+  pendingPayouts: 0,
+  activeAmcContracts: 0,
+  expiringAmcContracts: 0,
+  openAmcRequests: 0,
+  recurringAmcValue: null,
+  recurringAmcValueAvailable: false,
+  invoiceDataAvailable: false,
+  taxDataAvailable: false,
+  lowStockItems: [],
+};
+
+function istDateParts(value: string | Date): { year: number; month: number; day: number; hour: number } {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(typeof value === 'string' ? new Date(value) : value);
+  const read = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return { year: read('year'), month: read('month'), day: read('day'), hour: read('hour') };
 }
 
 interface PartnerRoleCount {
@@ -171,20 +370,6 @@ interface PartnerRoleCount {
   count: number;
 }
 
-const JOB_STAGES: JobStage[] = [
-  'triage',
-  'assigned',
-  'scheduled',
-  'on-site',
-  'in-service',
-  'quality-check',
-];
-
-const JOB_CHECKLIST_TEMPLATE: Omit<JobChecklistItem, 'done'>[] = [
-  { id: 'safety', label: 'Confirm site access and equipment isolation' },
-  { id: 'scope', label: 'Complete the requested inspection or repair' },
-  { id: 'handover', label: 'Record service findings and customer handover' },
-];
 @Injectable({ providedIn: 'root' })
 export class OperationsService {
   private readonly api = inject(AdminApiService);
@@ -194,10 +379,12 @@ export class OperationsService {
   private readonly _amcs = signal<AmcContract[]>([]);
   private readonly _inventory = signal<InventoryItem[]>([]);
   private readonly analyticsEvents = signal<AnalyticsEvent[]>([]);
+  private readonly _analyticsInsights = signal<AnalyticsInsights>(EMPTY_ANALYTICS_INSIGHTS);
   private readonly sourceStatuses = signal<Record<string, SourceStatus>>({});
   readonly loadErrors = signal<Record<string, string>>({});
   readonly jobs = signal<Job[]>([]);
   readonly partners = signal<Partner[]>([]);
+  readonly jobsLastSyncedAt = signal<string | null>(null);
   readonly partnerRoleCounts = signal<PartnerRoleCount[]>([]);
   readonly verifications = signal<VerificationRequest[]>([]);
   readonly disputes = signal<Dispute[]>([]);
@@ -223,21 +410,24 @@ export class OperationsService {
   }
 
   get revenueTrend(): Array<{ label: string; value: number }> {
-    const now = new Date();
+    const now = istDateParts(new Date());
     const months = Array.from({ length: 6 }, (_, index) => {
-      const month = new Date(now.getFullYear(), now.getMonth() - 5 + index, 1);
+      const month = new Date(Date.UTC(now.year, now.month - 1 - 5 + index, 1));
+      const year = month.getUTCFullYear();
+      const monthNumber = month.getUTCMonth() + 1;
       return {
-        key: `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`,
-        label: month.toLocaleDateString('en-IN', { month: 'short' }),
+        key: `${year}-${String(monthNumber).padStart(2, '0')}`,
+        label: new Intl.DateTimeFormat('en-IN', { month: 'short', timeZone: 'UTC' }).format(month),
         value: 0,
       };
     });
     for (const event of this.analyticsEvents()) {
-      const date = new Date(event.at);
+      if (!event.revenueAt) continue;
+      const date = istDateParts(event.revenueAt);
       const point = months.find((month) =>
-        month.key === `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+        month.key === `${date.year}-${String(date.month).padStart(2, '0')}`,
       );
-      if (point && event.category === 'service') point.value += event.amount;
+      if (point && event.category === 'SVC') point.value += event.grossRevenue;
     }
     return months;
   }
@@ -254,8 +444,8 @@ export class OperationsService {
     const events = this.analyticsEvents();
     return ranges.map((range) => ({
       label: range.label,
-      value: events.filter((event) => {
-        const hour = new Date(event.at).getHours();
+      value: events.filter((event) => event.kind !== 'earning').filter((event) => {
+        const hour = istDateParts(event.activityAt).hour;
         return hour >= range.start && hour < range.end;
       }).length,
     }));
@@ -263,15 +453,17 @@ export class OperationsService {
 
   get categoryRevenue(): Array<{ label: string; value: number }> {
     const labels: Record<AnalyticsEvent['category'], string> = {
-      service: 'Service earnings',
-      repair: 'Repairs',
-      amc: 'AMC',
-      ecart: 'Paid orders',
-      projects: 'Projects',
+      SVC: 'Service',
+      REP: 'Repairs',
+      PANEL: 'Panels & projects',
+      DEL: 'Delivery',
+      AMC: 'AMC',
+      ORDERS: 'Orders',
+      OTHER: 'Unmapped',
     };
     const totals = new Map<AnalyticsEvent['category'], number>();
     for (const event of this.analyticsEvents()) {
-      totals.set(event.category, (totals.get(event.category) ?? 0) + event.amount);
+      totals.set(event.category, (totals.get(event.category) ?? 0) + event.grossRevenue);
     }
     return [...totals].map(([category, value]) => ({ label: labels[category], value }));
   }
@@ -309,31 +501,47 @@ export class OperationsService {
     return this.analyticsEvents();
   }
 
-  private async loadDomain(domain: string): Promise<void> {
-    this.sourceStatuses.update((statuses) => ({ ...statuses, [domain]: 'loading' }));
+  analyticsInsights(): AnalyticsInsights {
+    return this._analyticsInsights();
+  }
+
+  private async loadDomain(domain: string): Promise<boolean> {
+    const syncedDomains = domain === 'jobs' || domain === 'livemonitor'
+      ? ['jobs', 'livemonitor']
+      : [domain];
+    this.sourceStatuses.update((statuses) =>
+      syncedDomains.reduce((next, key) => ({ ...next, [key]: 'loading' }), statuses),
+    );
     try {
       if (domain === 'jobs' || domain === 'livemonitor') {
         const result = await this.api.getOperations<JobsResponse>(domain);
         this.jobs.set(result.jobs);
         this.partners.set(result.partners);
+        this.jobsLastSyncedAt.set(new Date().toISOString());
         this.sourceStatuses.update((statuses) => ({
           ...statuses,
           jobs: result.sourceStatus,
           livemonitor: result.sourceStatus,
         }));
-        return;
+        this.loadErrors.update((errors) => {
+          const next = { ...errors };
+          for (const key of syncedDomains) delete next[key];
+          return next;
+        });
+        return true;
       }
       if (domain === 'partner-app') {
         const result = await this.api.getOperations<OperationsResponse<PartnerRoleCount>>(domain);
         this.partnerRoleCounts.set(result.items);
         this.sourceStatuses.update((statuses) => ({ ...statuses, [domain]: result.sourceStatus }));
-        return;
+        return true;
       }
       if (domain === 'analytics') {
         const result = await this.api.getOperations<OperationsResponse<AnalyticsEvent>>(domain);
         this.analyticsEvents.set(result.items);
+        this._analyticsInsights.set(result.insights ?? EMPTY_ANALYTICS_INSIGHTS);
         this.sourceStatuses.update((statuses) => ({ ...statuses, analytics: result.sourceStatus }));
-        return;
+        return true;
       }
       const result = await this.api.getOperations<OperationsResponse<
         VerificationRequest | Dispute | Company | AmcContract | Payout | Invoice |
@@ -349,18 +557,29 @@ export class OperationsService {
       if (domain === 'inventory') this._inventory.set(result.items as InventoryItem[]);
       if (domain === 'repair') this.repairs.set(result.items as RepairTicket[]);
       if (domain === 'projects') this.projects.set(result.items as ProjectRequest[]);
+      return true;
     } catch (error) {
       const message = error instanceof HttpErrorResponse && typeof error.error?.message === 'string'
         ? error.error.message
         : error instanceof Error ? error.message : 'Operations data could not be loaded.';
-      this.sourceStatuses.update((statuses) => ({ ...statuses, [domain]: 'error' }));
-      this.loadErrors.update((errors) => ({ ...errors, [domain]: message }));
+      this.sourceStatuses.update((statuses) =>
+        syncedDomains.reduce((next, key) => ({ ...next, [key]: 'error' }), statuses),
+      );
+      this.loadErrors.update((errors) =>
+        syncedDomains.reduce((next, key) => ({ ...next, [key]: message }), errors),
+      );
       console.error(`Unable to load Superadmin operations data for ${domain}.`, error);
+      return false;
     }
   }
 
   /* -------- dashboard aggregates -------- */
-  readonly liveJobs = () => this.jobs().filter((j) => j.status === 'progress' || j.status === 'unassigned' || j.status === 'sla-risk');
+  readonly liveJobs = () => this.jobs().filter((job) => job.status !== 'completed');
+  readonly unassignedJobs = () => this.liveJobs().filter((job) => job.status === 'unassigned');
+  readonly inProgressJobs = () => this.liveJobs().filter((job) => job.status === 'progress');
+  readonly atRiskJobs = () => this.liveJobs().filter((job) =>
+    job.slaMinsLeft !== null && job.slaMinsLeft > 0 && job.slaMinsLeft <= 60,
+  );
   readonly slaRiskJobs = () => this.jobs().filter((j) => j.status === 'sla-risk');
   readonly partnersOnline = () => this.partners().filter((p) => p.online);
   readonly pendingApprovals = () => this.verifications().length;
@@ -369,183 +588,80 @@ export class OperationsService {
   readonly pendingPayoutTotal = () => this.pendingPayouts().reduce((n, p) => n + p.amount, 0);
   readonly monthRevenue = () => this.revenueTrend.at(-1)?.value ?? 0;
   readonly todayServiceEarnings = () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const currentDay = istDateParts(new Date());
+    const today = `${currentDay.year}-${String(currentDay.month).padStart(2, '0')}-${String(currentDay.day).padStart(2, '0')}`;
     return this.analyticsEvents()
-      .filter((event) => event.category === 'service' && event.at.slice(0, 10) === today)
-      .reduce((total, event) => total + event.amount, 0);
+      .filter((event) => {
+        if (event.category !== 'SVC' || !event.revenueAt) return false;
+        const parts = istDateParts(event.revenueAt);
+        return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}` === today;
+      })
+      .reduce((total, event) => total + event.grossRevenue, 0);
   };
   readonly lowStockItems = () => this.inventory.filter((i) => i.stock <= i.low);
   readonly inventorySuppliers = () =>
     new Set(this.inventory.map((item) => item.supplier).filter((supplier) => supplier && supplier !== '—')).size;
-  readonly activeRepairs = () => this.repairs().filter((r) => r.stage !== 'delivered');
+  readonly activeRepairs = () =>
+    this.repairs().filter((ticket) => !['delivered', 'cancelled', 'draft'].includes(ticket.stage));
   readonly expiringAmcs = () => this.amcs.filter((a) => a.daysLeft <= 30);
 
   /* -------- actions (superadmin workflows) -------- */
 
-  assignJob(jobId: string, partnerName: string | null): void {
+  async refreshOperations(domain?: 'jobs' | 'livemonitor' | 'repair'): Promise<boolean> {
+    return this.loadDomain(domain ?? (this.auth.canAccess('jobs') ? 'jobs' : 'livemonitor'));
+  }
+
+  async assignJob(jobId: string, partnerId: string | null): Promise<{ assignment: OperationAssignment; refreshed: boolean }> {
+    const assignment = await this.api.assignOperationJob(jobId, partnerId);
     const at = new Date().toISOString();
+    const partner = partnerId ? this.partners().find((item) => item.id === partnerId) ?? null : null;
     this.jobs.update((list) =>
       list.map((job) => {
-        if (job.id !== jobId || job.status === 'completed' || job.partner === partnerName) return job;
-        const title = partnerName ? (job.partner ? 'Partner reassigned' : 'Partner assigned') : 'Partner unassigned';
-        const detail = partnerName
-          ? `${partnerName} ${job.partner ? 'is now responsible for' : 'accepted'} this job.`
+        if (job.id !== jobId || job.status === 'completed' || !assignment.changed) return job;
+        const partnerName = partner?.name ?? assignment.partnerName ?? null;
+        const title = partnerId ? (job.partner ? 'Partner reassigned' : 'Partner assigned') : 'Partner unassigned';
+        const detail = partnerId
+          ? `${partnerName ?? 'Selected partner'} is assigned to this job.`
           : `${job.partner ?? 'The assigned partner'} was removed from this job.`;
         return {
           ...job,
           partner: partnerName,
-          status: partnerName ? 'progress' : 'unassigned',
-          stage: partnerName
-            ? job.stage && job.stage !== 'triage' ? job.stage : 'assigned'
-            : job.stage === 'assigned' ? 'triage' : job.stage,
-          slaMinsLeft: partnerName ? (job.slaMinsLeft ?? 120) : job.slaMinsLeft,
+          partnerId,
+          stage: partnerId ? 'assigned' : 'triage',
+          status: job.slaMinsLeft !== null && job.slaMinsLeft <= 0
+            ? 'sla-risk'
+            : partnerId ? 'progress' : 'unassigned',
+          assignedAt: assignment.assignedAt ?? (partnerId ? at : undefined),
           activity: [...(job.activity ?? []), { at, title, detail }],
         };
       }),
     );
+    if (partnerId) {
+      this.partners.update((list) => list.map((item) =>
+        item.id === partnerId ? { ...item, busy: true } : item,
+      ));
+    }
+    return { assignment, refreshed: await this.refreshOperations() };
   }
 
-  jobStage(job: Job): JobStage | 'completed' {
-    if (job.status === 'completed') return 'completed';
-    if (job.stage) return job.stage;
-    if (job.scheduledAt) return 'scheduled';
-    return job.partner ? 'assigned' : 'triage';
+  async transitionRepairStage(
+    id: string,
+    stage: RepairTicket['stage'],
+    remarks: string,
+    details?: {
+      estimatedCost?: number;
+      quoteApproved?: boolean;
+      parts?: Array<{ sku: string; name: string; quantity: number }>;
+      benchPartnerId?: string;
+      benchPartnerName?: string;
+    },
+  ): Promise<boolean> {
+    await this.api.transitionRepairStage(id, stage, remarks, details);
+    return this.loadDomain('repair');
   }
 
-  nextJobStage(job: Job): JobStage | null {
-    const currentStage = this.jobStage(job);
-    if (currentStage === 'completed') return null;
-    const currentIndex = JOB_STAGES.indexOf(currentStage);
-    if (currentIndex < 0) return null;
-    const nextIndex = currentIndex + 1;
-    return JOB_STAGES[nextIndex] ?? null;
-  }
-
-  canAdvanceJobStage(job: Job): boolean {
-    const nextStage = this.nextJobStage(job);
-    return !!nextStage &&
-      !!job.partner &&
-      (nextStage !== 'scheduled' || !!job.scheduledAt);
-  }
-
-  advanceJobStage(jobId: string): boolean {
-    const at = new Date().toISOString();
-    let updated = false;
-    this.jobs.update((list) => list.map((job) => {
-      if (job.id !== jobId || !this.canAdvanceJobStage(job)) return job;
-      const stage = this.nextJobStage(job);
-      if (!stage) return job;
-      updated = true;
-      return {
-        ...job,
-        stage,
-        status: job.status === 'sla-risk' ? 'sla-risk' : 'progress',
-        activity: [...(job.activity ?? []), {
-          at,
-          title: 'Stage advanced',
-          detail: `Service delivery moved to ${this.stageLabel(stage)}.`,
-        }],
-      };
-    }));
-    return updated;
-  }
-
-  scheduleJob(jobId: string, scheduledAt: string): boolean {
-    const date = new Date(scheduledAt);
-    if (!Number.isFinite(date.getTime())) return false;
-    const at = new Date().toISOString();
-    let updated = false;
-    this.jobs.update((list) => list.map((job) => {
-      if (job.id !== jobId || job.status === 'completed') return job;
-      updated = true;
-      const stage = this.jobStage(job);
-      return {
-        ...job,
-        scheduledAt: date.toISOString(),
-        stage: stage === 'triage' || stage === 'assigned' ? 'scheduled' : job.stage,
-        activity: [...(job.activity ?? []), {
-          at,
-          title: 'Visit scheduled',
-          detail: `Service visit scheduled for ${date.toLocaleString()}.`,
-        }],
-      };
-    }));
-    return updated;
-  }
-
-  jobChecklist(job: Job): JobChecklistItem[] {
-    return job.checklist ?? JOB_CHECKLIST_TEMPLATE.map((item) => ({ ...item, done: false }));
-  }
-
-  toggleJobChecklistItem(jobId: string, itemId: string): boolean {
-    const at = new Date().toISOString();
-    let updated = false;
-    this.jobs.update((list) => list.map((job) => {
-      if (job.id !== jobId || job.status === 'completed') return job;
-      const currentChecklist = this.jobChecklist(job);
-      const currentItem = currentChecklist.find((entry) => entry.id === itemId);
-      if (!currentItem) return job;
-      updated = true;
-      const item = { ...currentItem, done: !currentItem.done };
-      const checklist = currentChecklist.map((entry) => entry.id === itemId
-        ? item
-        : entry);
-      return {
-        ...job,
-        checklist,
-        activity: [...(job.activity ?? []), {
-          at,
-          title: 'Checklist updated',
-          detail: `${item.label} marked ${item.done ? 'complete' : 'incomplete'}.`,
-        }],
-      };
-    }));
-    return updated;
-  }
-
-  addJobWorkNote(jobId: string, note: string): boolean {
-    const trimmed = note.trim();
-    if (!trimmed || trimmed.length > 500) return false;
-    const at = new Date().toISOString();
-    let updated = false;
-    this.jobs.update((list) => list.map((job) => {
-      if (job.id !== jobId) return job;
-      updated = true;
-      const entry = { at, title: 'Work note', detail: trimmed };
-      return {
-        ...job,
-        workNotes: [...(job.workNotes ?? []), entry],
-        activity: [...(job.activity ?? []), entry],
-      };
-    }));
-    return updated;
-  }
-
-  stageLabel(stage: JobStage | 'completed'): string {
-    const labels: Record<JobStage | 'completed', string> = {
-      triage: 'Triage',
-      assigned: 'Partner assigned',
-      scheduled: 'Visit scheduled',
-      'on-site': 'On site',
-      'in-service': 'In service',
-      'quality-check': 'Quality check',
-      completed: 'Completed',
-    };
-    return labels[stage];
-  }
-
-  completeJob(jobId: string): void {
-    const at = new Date().toISOString();
-    this.jobs.update((list) =>
-      list.map((job) => job.id === jobId && job.status !== 'completed'
-        ? {
-            ...job,
-            status: 'completed' as const,
-            slaMinsLeft: null,
-            activity: [...(job.activity ?? []), { at, title: 'Job completed', detail: 'The job was marked complete by an administrator.' }],
-          }
-        : job),
-    );
+  async loadProjects(): Promise<boolean> {
+    return this.loadDomain('projects');
   }
 
   approvePartner(id: string): void {

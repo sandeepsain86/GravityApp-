@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, HostListener, computed, effect, inject, signal, untracked, ViewChild } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
@@ -22,6 +22,7 @@ interface NavItem {
 
 interface NavGroup {
   label: string;
+  icon: string;
   items: NavItem[];
 }
 
@@ -44,12 +45,17 @@ export class AdminLayout {
   readonly avatarImageUrl = this.profileApi.avatarImageUrl;
   readonly impersonation = this.auth.impersonation;
   readonly sidebarOpen = signal(typeof window === 'undefined' || window.innerWidth > 900);
+  readonly headerSearch = signal('');
   readonly logoutError = signal<string | null>(null);
+  readonly fullscreen = signal(false);
+  readonly fullscreenError = signal<string | null>(null);
   readonly expandedNavGroup = signal<string | null>(null);
+  @ViewChild('headerSearchInput') private headerSearchInput?: ElementRef<HTMLInputElement>;
 
   readonly nav: NavGroup[] = [
     {
       label: 'Overview',
+      icon: 'grid',
       items: [
         { label: 'Dashboard', icon: 'grid', route: '/dashboard', page: 'dashboard', exact: true },
         { label: 'Analytics', icon: 'chart', route: '/analytics', page: 'analytics' },
@@ -57,6 +63,7 @@ export class AdminLayout {
     },
     {
       label: 'Operations',
+      icon: 'pulse',
       items: [
         { label: 'Live Monitor', icon: 'pulse', route: '/livemonitor', page: 'livemonitor', badge: 'LIVE', badgeTone: 'green' },
         { label: 'Jobs', icon: 'list', route: '/jobs', page: 'jobs' },
@@ -67,6 +74,7 @@ export class AdminLayout {
     },
     {
       label: 'Field Partners',
+      icon: 'truck',
       items: [
         { label: 'Verification', icon: 'check', route: '/verification', page: 'verification' },
         { label: 'Disputes', icon: 'warn', route: '/disputes', page: 'disputes' },
@@ -75,6 +83,7 @@ export class AdminLayout {
     },
     {
       label: 'Business',
+      icon: 'building',
       items: [
         { label: 'Companies', icon: 'building', route: '/companies', page: 'companies' },
         { label: 'AMC Contracts', icon: 'list', route: '/amc', page: 'amc' },
@@ -84,6 +93,7 @@ export class AdminLayout {
     },
     {
       label: 'Apps & Admin',
+      icon: 'gear',
       items: [
         { label: 'Customer Panel', icon: 'users', route: '/modules/customer-panel', page: 'customer-panel' },
         { label: 'Partner App', icon: 'truck', route: '/modules/partner-app', page: 'partner-app' },
@@ -119,6 +129,14 @@ export class AdminLayout {
       }))
       .filter((group) => group.items.length > 0),
   );
+  readonly headerSearchMatches = computed(() => {
+    const query = this.headerSearch().trim().toLocaleLowerCase();
+    if (!query) return [];
+    return this.visibleNav()
+      .flatMap((group) => group.items.map((item) => ({ ...item, group: group.label })))
+      .filter((item) => item.label.toLocaleLowerCase().includes(query))
+      .slice(0, 6);
+  });
   readonly initials = computed(() => this.user()?.avatarInitials ?? 'SA');
   readonly firstName = computed(() => {
     const name = this.user()?.name.trim();
@@ -127,6 +145,20 @@ export class AdminLayout {
 
   onRouteActivated(): void {
     this.updateActiveNavGroup();
+    this.headerSearch.set('');
+  }
+
+  searchHeader(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.headerSearch.set(target.value);
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  focusHeaderSearch(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === 'k') {
+      event.preventDefault();
+      this.headerSearchInput?.nativeElement.focus();
+    }
   }
 
   toggleSidebar(): void {
@@ -146,6 +178,29 @@ export class AdminLayout {
 
   toggleMode(): void {
     this.theme.toggleMode();
+  }
+
+  @HostListener('document:fullscreenchange')
+  syncFullscreenState(): void {
+    this.fullscreen.set(Boolean(document.fullscreenElement));
+    this.fullscreenError.set(null);
+  }
+
+  async toggleFullscreen(): Promise<void> {
+    this.fullscreenError.set(null);
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (document.fullscreenEnabled && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        throw new Error('Fullscreen is not supported by this browser.');
+      }
+    } catch (error) {
+      this.fullscreenError.set(error instanceof Error
+        ? `Unable to change fullscreen mode: ${error.message}`
+        : 'Unable to change fullscreen mode.');
+    }
   }
 
   async logout(): Promise<void> {

@@ -1,4 +1,6 @@
-const ONBOARDING = {
+const pool = require('../../config/energy_service/db').pool;
+
+const DEFAULT_STATUSES = {
   OTP_PENDING: 'OTP_PENDING',
   PHONE_VERIFIED: 'PHONE_VERIFIED',
   COMPANY_PENDING: 'COMPANY_PENDING',
@@ -8,6 +10,40 @@ const ONBOARDING = {
   PROFILE_PENDING: 'PROFILE_PENDING',
   ONBOARDING_COMPLETED: 'ONBOARDING_COMPLETED',
 };
+
+let onboardingStatusCache = null;
+let onboardingStatusCacheTime = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function loadOnboardingStatuses() {
+  const now = Date.now();
+  if (onboardingStatusCache && now - onboardingStatusCacheTime < CACHE_TTL_MS) {
+    return onboardingStatusCache;
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT code FROM superadmin.onboarding_statuses ORDER BY sort_order ASC`
+    );
+    if (rows && rows.length > 0) {
+      const statuses = {};
+      for (const row of rows) {
+        statuses[row.code] = row.code;
+      }
+      onboardingStatusCache = statuses;
+      onboardingStatusCacheTime = now;
+      return statuses;
+    }
+  } catch (error) {
+    // Fall back to defaults if table not yet migrated
+  }
+  onboardingStatusCache = { ...DEFAULT_STATUSES };
+  onboardingStatusCacheTime = now;
+  return onboardingStatusCache;
+}
+
+function getStatusCode(key) {
+  return DEFAULT_STATUSES[key] || key;
+}
 
 function hasProfile(user) {
   const name = user && (user.name || user.full_name);
@@ -23,17 +59,19 @@ function hasVerifiedContact(user) {
   ));
 }
 
-function deriveOnboardingStatus(user, siteCount = 0) {
-  if (!user) return ONBOARDING.OTP_PENDING;
-  if (!hasVerifiedContact(user) && !user.password_hash) return ONBOARDING.OTP_PENDING;
-  if (!user.company_id) return ONBOARDING.COMPANY_PENDING;
-  if (!siteCount) return ONBOARDING.SITES_PENDING;
-  if (!hasProfile(user)) return ONBOARDING.PROFILE_PENDING;
-  return ONBOARDING.ONBOARDING_COMPLETED;
+async function deriveOnboardingStatus(user, siteCount = 0) {
+  const statuses = await loadOnboardingStatuses();
+  if (!user) return statuses.OTP_PENDING;
+  if (!hasVerifiedContact(user) && !user.password_hash) return statuses.OTP_PENDING;
+  if (!user.company_id) return statuses.COMPANY_PENDING;
+  if (!siteCount) return statuses.SITES_PENDING;
+  if (!hasProfile(user)) return statuses.PROFILE_PENDING;
+  return statuses.ONBOARDING_COMPLETED;
 }
 
-function onboardingFlags(user, siteCount = 0) {
-  const status = deriveOnboardingStatus(user, siteCount);
+async function onboardingFlags(user, siteCount = 0) {
+  const statuses = await loadOnboardingStatuses();
+  const status = await deriveOnboardingStatus(user, siteCount);
   return {
     status,
     phoneVerified: Boolean(user && (user.phone_verified || user.phone_verified_at)),
@@ -46,7 +84,9 @@ function onboardingFlags(user, siteCount = 0) {
 }
 
 module.exports = {
-  ONBOARDING,
+  DEFAULT_STATUSES,
+  loadOnboardingStatuses,
+  getStatusCode,
   deriveOnboardingStatus,
   onboardingFlags,
   hasProfile,

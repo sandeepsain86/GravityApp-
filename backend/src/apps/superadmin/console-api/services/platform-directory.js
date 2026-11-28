@@ -361,7 +361,7 @@ async function getProviderDetails(connections, userId) {
       [userId],
     ),
     providerDb.query(
-      `SELECT step.job_id, step.step_key, step.status,
+      `SELECT step.job_id, step.step_key, step.status, step.checked_in_at, step.completed_at,
               COALESCE(step.completed_at, step.checked_in_at, step.updated_at, step.created_at) AS at
          FROM job_workflow_steps step
          JOIN jobs job ON job.id = step.job_id
@@ -385,18 +385,24 @@ async function getProviderDetails(connections, userId) {
   if (!user) return null;
 
   const activeJobs = jobs.filter((job) => job.status === 'accepted' || job.status === 'in_progress');
-  const currentJob = activeJobs[0] || null;
   const latestLocation = liveLocations[0];
+  const currentJob = activeJobs.find((job) =>
+    String(job.id) === String(latestLocation?.job_id),
+  ) || activeJobs[0] || null;
   const locationBelongsToCurrentJob = currentJob &&
     String(latestLocation?.job_id) === String(currentJob.id);
   const lastLocationUpdateAt = locationBelongsToCurrentJob
     ? asIso(latestLocation.updated_at)
     : null;
   const locationAge = lastLocationUpdateAt ? Date.now() - Date.parse(lastLocationUpdateAt) : Infinity;
-  const liveLocation = locationBelongsToCurrentJob && locationAge >= 0 && locationAge <= 120000
+  const latitude = optionalNumber(latestLocation?.latitude);
+  const longitude = optionalNumber(latestLocation?.longitude);
+  const liveLocation = locationBelongsToCurrentJob && locationAge >= 0 && locationAge <= 120000 &&
+    latitude !== null && latitude >= -90 && latitude <= 90 &&
+    longitude !== null && longitude >= -180 && longitude <= 180
     ? {
-      latitude: numeric(latestLocation.latitude),
-      longitude: numeric(latestLocation.longitude),
+      latitude,
+      longitude,
     }
     : null;
   const registration = buildProviderRegistrations(
@@ -408,6 +414,10 @@ async function getProviderDetails(connections, userId) {
   )[0];
   const stagesByJob = groupBy(stageRows, 'job_id');
   const workflowByJob = groupBy(workflowRows, 'job_id');
+  const currentJobWorkflow = currentJob
+    ? workflowByJob.get(String(currentJob.id)) || []
+    : [];
+  const checkInStep = currentJobWorkflow.find((step) => step.step_key === 'checkin');
   const activity = jobs.map((job) => {
     const timeline = [
       ...timelineFor(stagesByJob.get(String(job.id)) || [], { label: 'Stage changed', statusKey: 'to_stage' }),
@@ -471,12 +481,17 @@ async function getProviderDetails(connections, userId) {
       lastLoginAt: null,
       updatedAt: asIso(user.updated_at),
       currentWork: currentJob ? {
+        id: String(currentJob.id),
         reference: text(currentJob.reference_id),
         title: text(currentJob.title) || 'Service job',
         stage: text(currentJob.stage) || text(currentJob.status) || 'unknown',
         site: text(currentJob.site_address) || text(currentJob.site_area),
+        startedAt: asIso(currentJob.created_at),
+        checkedInAt: asIso(checkInStep?.checked_in_at || checkInStep?.completed_at),
         lastLocationUpdateAt,
         liveLocation,
+        distanceKm: optionalNumber(currentJob.distance_km),
+        travelEtaMinutes: optionalNumber(currentJob.estimated_drive_minutes),
       } : null,
       partnerSince: asIso(user.partner_since),
       travelRadiusKm: optionalNumber(user.travel_radius_km),

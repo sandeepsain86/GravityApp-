@@ -110,4 +110,37 @@ describe('AdminLayout notifications access', () => {
     expect(element.querySelector('.sidebar-profile-name')?.textContent?.trim()).toBe('Taylor');
     expect(element.querySelector('.header-profile-name')).toBeNull();
   });
+
+  it('searches visible navigation and supports the Ctrl+K shortcut', () => {
+    const fixture = TestBed.createComponent(AdminLayout);
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    const search = element.querySelector<HTMLInputElement>('.header-search input')!;
+
+    search.value = 'Repair';
+    search.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    expect(element.querySelectorAll('.header-search-results a')).toHaveLength(1);
+    expect(element.querySelector('.header-search-results')?.textContent).toContain('Repair Center');
+
+    search.blur();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(search);
+  });
+
+  it('offers fullscreen and reports when the browser does not support it', async () => {
+    const fixture = TestBed.createComponent(AdminLayout);
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    const fullscreenButton = element.querySelector<HTMLButtonElement>('.fullscreen-toggle')!;
+
+    expect(fullscreenButton.getAttribute('aria-label')).toBe('Enter fullscreen');
+    fullscreenButton.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(element.querySelector('[role="alert"]')?.textContent)
+      .toContain('Fullscreen is not supported');
+  });
 });

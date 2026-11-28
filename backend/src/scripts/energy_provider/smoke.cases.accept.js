@@ -40,6 +40,7 @@ module.exports = async function acceptanceCases() {
     'job is assigned to the partner',
     String(accepted.assignedPartnerId) === String(partnerA.id)
   );
+  check('job assignment time is persisted', Boolean((await JobModel.findById(job.id)).assigned_at));
 
   const busyA = await UserModel.findById(partnerA.id);
   check('accepting marks the partner busy', busyA.is_busy === 1);

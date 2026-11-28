@@ -31,11 +31,11 @@ export function requireAuth(
   return async (request, response, next): Promise<void> => {
     const credential = readSessionCredential(request.headers.cookie, request.headers.authorization);
     const sessionId = credential.sessionId;
-    const session = sessionId ? sessions.get(sessionId) : undefined;
+    const session = sessionId ? await sessions.get(sessionId) : undefined;
     const user = session ? await store.getUserById(session.userId) : undefined;
     if (!sessionId || !session || !user || user.disabled ||
         (session.impersonatedBy && user.role === 'superadmin')) {
-      if (sessionId && session) sessions.revoke(sessionId);
+      if (sessionId && session) await sessions.revoke(sessionId);
       response.status(401).json({ message: 'Authentication required.' });
       return;
     }
@@ -44,7 +44,7 @@ export function requireAuth(
       if (!actor || actor.disabled || actor.role !== 'superadmin' ||
           !(await access.can(actor, 'users', 'view')) ||
           !(await access.can(actor, 'users', 'edit'))) {
-        sessions.revoke(sessionId);
+        await sessions.revoke(sessionId);
         response.status(401).json({ message: 'The Superadmin panel access session has expired.' });
         return;
       }

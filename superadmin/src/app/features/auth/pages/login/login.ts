@@ -17,24 +17,11 @@ export class Login {
   readonly showPassword = signal(false);
   readonly loading = signal(false);
   readonly serverError = signal<string | null>(this.auth.sessionError());
-  readonly localDemoCredentials = signal<{ email: string; password: string } | null>(null);
-  readonly demoLoadError = signal(false);
 
   readonly form = this.fb.nonNullable.group({
     email: ['', [Validators.required, Validators.email]],
     password: ['', [Validators.required]],
   });
-
-  constructor() {
-    void this.loadLocalDemoCredentials();
-  }
-
-  useDemoCredentials(): void {
-    const credentials = this.localDemoCredentials();
-    if (!credentials) return;
-    this.form.setValue(credentials);
-    this.serverError.set(null);
-  }
 
   showError(control: 'email' | 'password'): boolean {
     const c = this.form.controls[control];
@@ -60,11 +47,4 @@ export class Login {
     }
   }
 
-  private async loadLocalDemoCredentials(): Promise<void> {
-    try {
-      this.localDemoCredentials.set(await this.auth.getLocalDemoCredentials());
-    } catch {
-      this.demoLoadError.set(true);
-    }
-  }
 }

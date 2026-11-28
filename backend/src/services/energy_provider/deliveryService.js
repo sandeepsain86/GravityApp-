@@ -97,11 +97,13 @@ const DeliveryService = {
           throw ApiError.conflict('You already have an active job. Complete it first.');
         }
 
+        const assignedAt = nowIso();
         const claimed = await handle.run(
           `UPDATE \`jobs\`
-              SET \`status\` = 'accepted', \`assigned_partner_id\` = ?, \`stage\` = 'pickup', \`updated_at\` = ?
+              SET \`status\` = 'accepted', \`assigned_partner_id\` = ?, \`stage\` = 'pickup',
+                  \`assigned_at\` = ?, \`updated_at\` = ?
             WHERE \`id\` = ? AND \`status\` = 'open' AND \`assigned_partner_id\` IS NULL`,
-          [user.id, nowIso(), job.id]
+          [user.id, assignedAt, assignedAt, job.id]
         );
         if (!claimed.affectedRows) {
           throw ApiError.conflict('This delivery job has already been taken');

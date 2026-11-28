@@ -5,6 +5,12 @@
     <p>Platform activity at a glance.</p>
   </div>
   <div class="dashboard-controls">
+    @if (canViewCompanies()) {
+      <label class="test-account-toggle">
+        <input type="checkbox" [checked]="showTestAccounts()" (change)="setShowTestAccounts($event)" />
+        <span>Show test / sandbox accounts</span>
+      </label>
+    }
     @if (canLoadPlatformData()) {
       <button class="refresh-button" type="button" (click)="loadPlatformData()" [disabled]="loadingPlatformData()">
         {{ loadingPlatformData() ? 'Refreshing…' : 'Refresh live data' }}
@@ -14,7 +20,7 @@
 </header>
 
 <div class="sample-notice" role="note">
-  Operational metrics and trends use database-backed records; unsupported sources are shown as disconnected.
+  Operational metrics use database-backed records. Full billed margin and first-time-fix rates are unavailable until invoice and repeat-visit outcomes are recorded.
 </div>
 
 @if (platformDataErrors().length) {
@@ -28,9 +34,17 @@
 <section class="stat-grid" aria-label="Business metrics">
   @for (metric of metrics(); track metric.label) {
     <a class="stat-card" [attr.data-tone]="metric.tone" [routerLink]="metric.route">
-      <span class="stat-label">{{ metric.label }}</span>
+      <span class="stat-card-head">
+        <span class="stat-icon menu-icon" [attr.data-icon]="metric.icon" aria-hidden="true"></span>
+        <span class="stat-label">{{ metric.label }}</span>
+      </span>
       <span class="stat-value">{{ metric.value }}</span>
       <span class="stat-context">{{ metric.context }}</span>
+      <span class="stat-mini-chart" role="img" [attr.aria-label]="metric.visualLabel">
+        @for (segment of metric.segments; track $index) {
+          <span [attr.data-tone]="segment.tone" [style.width.%]="segment.percentage"></span>
+        }
+      </span>
       <span class="stat-arrow" aria-hidden="true">↗</span>
     </a>
   }
@@ -45,7 +59,7 @@
     </div>
   </div>
   @if (smartInsights().length) {
-    <div class="insight-list">
+    <div class="insight-list" role="region" aria-label="Operating recommendations" tabindex="0">
       @for (insight of smartInsights(); track insight.title) {
         <article class="insight-item" [attr.data-tone]="insight.tone">
           <div>
@@ -80,18 +94,8 @@
           <a class="panel-link" routerLink="/finance">Finance <span aria-hidden="true">→</span></a>
         </div>
       </div>
-      <div class="trend-chart" role="img" aria-label="Monthly service earnings trend"
-        [style.grid-template-columns]="'repeat(' + revenueTrend().length + ', minmax(0, 1fr))'">
-        @for (point of revenueTrend(); track point.label) {
-          <div class="trend-column">
-            <span class="trend-value">{{ formatCurrency(point.value) }}</span>
-            <div class="trend-track">
-              <div class="trend-bar" [style.height.%]="point.height"></div>
-            </div>
-            <span class="trend-month">{{ point.label }}</span>
-          </div>
-        }
-      </div>
+      <app-admin-chart type="line" [labels]="revenueTrend().map(point => point.label)"
+        [datasets]="revenueChartDatasets()" label="Monthly service earnings trend" />
     </article>
   }
 
@@ -130,10 +134,8 @@
       <a class="panel-link" routerLink="/directory">Directory <span aria-hidden="true">→</span></a>
     </div>
     <div class="partner-chart">
-      <div class="partner-donut" [style.background]="appBreakdown().donutStyle.background"
-        role="img" [attr.aria-label]="appBreakdown().total + ' live platform registrations'">
-        <span>{{ loadingPlatformData() ? '…' : appBreakdown().total }}<small>accounts</small></span>
-      </div>
+      <app-admin-chart type="bar" [labels]="appBreakdown().items.map(item => item.label)"
+        [datasets]="registrationChartDatasets()" label="Live registrations by platform" />
       <div class="account-legend">
         @for (item of appBreakdown().items; track item.app) {
           <div class="attention-row partner-legend-row">
@@ -173,25 +175,30 @@
       <div class="panel-heading">
         <div>
           <h2>Customer portfolio</h2>
-          <p>{{ customerSummary().companies }} companies · {{ customerSummary().users }} users · {{ customerSummary().sites }} sites · {{ customerSummary().followUp }} need AMC follow-up</p>
+          <p>{{ customerSummary().companies }} companies · {{ customerSummary().users }} users · {{ customerSummary().sites }} sites · {{ customerSummary().followUp }} need AMC follow-up · {{ customerSummary().churnRisk }} inactive 60+ days. Recorded value only; invoice-ledger data is unavailable.</p>
         </div>
         <a class="panel-link" routerLink="/companies">Companies <span aria-hidden="true">→</span></a>
       </div>
       <div class="portfolio-toolbar">
-        <span>Companies ranked by recorded orders and service earnings</span>
         <div class="filter-pills" aria-label="Filter customer accounts">
           <button type="button" [attr.aria-pressed]="customerFilter() === 'all'" (click)="customerFilter.set('all')">All</button>
           <button type="button" [attr.aria-pressed]="customerFilter() === 'active'" (click)="customerFilter.set('active')">Active AMC</button>
           <button type="button" [attr.aria-pressed]="customerFilter() === 'follow-up'" (click)="customerFilter.set('follow-up')">Follow-up</button>
         </div>
       </div>
-      <p class="customer-rating-note">Customer ratings are not in the current data feed; this view compares billed value, jobs, sites and AMC status.</p>
       <div class="portfolio-list" role="region" aria-label="Scrollable customer portfolio" tabindex="0">
-        @for (company of customerPerformance(); track company.name) {
+        @for (company of customerPerformance(); track company.id ?? company.name) {
           <div class="portfolio-row">
             <div class="portfolio-copy">
               <strong>{{ company.name }}</strong>
-              <span>{{ company.totalJobs }} jobs · {{ company.sites }} sites · {{ company.portfolioShare }}% of portfolio</span>
+              <span>{{ company.totalJobs }} jobs · {{ company.sites }} sites · {{ company.portfolioShare }}% of recorded value</span>
+              @if (company.churnRisk) {
+                <small class="churn-risk-tag">No service activity in 60+ days</small>
+              } @else if (company.lastActivityAt) {
+                <small>Last service activity {{ formatDate(company.lastActivityAt) }}</small>
+              } @else {
+                <small>Service activity date unavailable</small>
+              }
             </div>
             <div class="portfolio-bar"><span [style.width.%]="company.revenuePercent"></span></div>
             <strong class="portfolio-value">{{ formatCurrency(company.revenue) }}</strong>
@@ -209,12 +216,12 @@
       <div class="panel-heading">
         <div>
           <h2>Provider leaderboard</h2>
-          <p>All Energy Hub providers · ranked by rating, experience and completed services</p>
+          <p>All Energy Hub providers · rated profiles first, then experience and completed services</p>
         </div>
         <a class="panel-link" routerLink="/directory">Providers <span aria-hidden="true">→</span></a>
       </div>
       @if (loadingPlatformData()) {
-        <p class="empty-state">Loading provider ratings…</p>
+        <p class="empty-state">Loading provider registrations…</p>
       } @else if (providerPerformance().length) {
         <div class="provider-list" role="region" aria-label="Scrollable provider rankings" tabindex="0">
           @for (provider of providerPerformance(); track provider.registrationId) {
@@ -235,7 +242,9 @@
                 </span>
                 @if ((provider.profile.ratingCount ?? 0) > 0) {
                   <small>{{ provider.profile.ratingCount }} ratings</small>
-                } @else if (provider.profile.rating !== null) {
+                } @else if (provider.profile.rating === null) {
+                  <small>Not rated yet</small>
+                } @else {
                   <small>Saved profile score</small>
                 } @else {
                   <small>No saved rating</small>
@@ -266,7 +275,9 @@
         <div class="priority-list">
           @for (job of priorityJobs(); track job.id) {
             <a class="priority-row" routerLink="/jobs">
-              <span class="job-status" [attr.data-status]="job.status" aria-hidden="true"></span>
+              <span class="priority-job-icon" [attr.data-status]="job.status" aria-hidden="true">
+                <span class="menu-icon" data-icon="tool"></span>
+              </span>
               <span class="job-main">
                 <strong>{{ job.id }}</strong>
                 <span>{{ job.company }} · {{ job.service }}</span>
@@ -293,7 +304,9 @@
       <div class="attention-list">
         @for (item of attentionItems(); track item.label) {
           <a class="attention-row" [routerLink]="item.route">
-            <span class="attention-mark" [attr.data-tone]="item.tone" aria-hidden="true"></span>
+            <span class="attention-mark menu-icon" [attr.data-tone]="item.tone"
+              [attr.data-icon]="item.tone === 'danger' ? 'warn' : item.tone === 'warn' ? 'pulse' : 'chart'"
+              aria-hidden="true"></span>
             <span class="attention-copy">
               <strong>{{ item.label }}</strong>
               <small>{{ item.detail }}</small>

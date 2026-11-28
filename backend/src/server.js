@@ -6,12 +6,11 @@
  *   /api/superadmin    superadmin
  *   /api/superadmin/console  Superadmin console UI API
  */
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const { ensureUnifiedDatabase, copyProviderData } = require('./config/database');
+const { getBaseUrl } = require('./config/shared');
+const { ensureUnifiedDatabase } = require('./config/database');
 const { createSuperadminConsole } = require('./apps/superadmin/console');
 
 function safeStartMessage(err) {
@@ -59,8 +58,6 @@ async function start() {
   const { migrate } = require('../database/energy_service/migrate');
 
   await hub.prepareDatabase();
-  await copyProviderData();
-  await hub.seedIfNeeded();
   await migrate();
   await connectDatabase();
   await passwordService.warmUp();
@@ -68,8 +65,8 @@ async function start() {
   const app = express();
   app.disable('x-powered-by');
   app.use(requestId);
-  app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
-  app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads', 'energy_service')));
+  app.use(cors({ origin: env.corsOrigin, credentials: true }));
+  app.use('/uploads', express.static(env.uploadsDir));
 
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/v1')) {
@@ -97,14 +94,14 @@ async function start() {
 
   app.use('/api/superadmin/console', superadminConsole.router);
 
-  const port = Number(process.env.PORT) || 3000;
+  const port = env.port;
 
   app.get('/', async (_req, res) => {
     res.json({
       success: true,
       message: 'Energy Hub API is running',
       data: {
-        database: 'energy_hub',
+        database: env.database.database,
         modules: {
           energy_provider: '/api/v1',
           energy_service: '/api',
@@ -121,7 +118,7 @@ async function start() {
     res.json({
       status: 'ok',
       service: 'energy_hub_backend',
-      database: 'energy_hub',
+      database: env.database.database,
       modules: ['energy_provider', 'energy_service', 'energy_website', 'superadmin', 'superadmin_console'],
       time: new Date().toISOString(),
     });
@@ -174,9 +171,9 @@ async function start() {
   });
 
   await new Promise((resolve, reject) => {
-    const listener = app.listen(port, '0.0.0.0', () => {
-      console.log(`Energy Hub API running on http://localhost:${port}`);
-      console.log('One database: energy_hub');
+    const listener = app.listen(port, env.host, () => {
+      console.log(`Energy Hub API running at ${getBaseUrl()}`);
+      console.log(`One database: ${env.database.database}`);
       console.log('  energy_provider  /api/v1');
       console.log('  energy_service   /api');
       console.log('  energy_website   /api/website');

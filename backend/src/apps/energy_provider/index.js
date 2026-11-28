@@ -1,7 +1,8 @@
-require('dotenv').config();
+require('../../config/shared');
 const express = require('express');
 const cors = require('cors');
 const config = require('../../config/energy_provider/env');
+const { getBaseUrl } = require('../../config/shared');
 const { notFound, errorHandler } = require('../../middleware/energy_provider/errorHandler');
 const { db } = require('../../db/energy_provider/index');
 
@@ -17,11 +18,8 @@ const validateProductionConfiguration = () => {
   if (config.CORS_ORIGIN === '*') {
     problems.push('CORS_ORIGIN must be restricted to the production app origins');
   }
-  if (!config.DATABASE_URL && !config.DB_PASSWORD) {
-    problems.push('A production database password is required');
-  }
-  if (config.DATABASE_URL && !/^postgres(?:ql)?:\/\//i.test(config.DATABASE_URL)) {
-    problems.push('Production DATABASE_URL must use PostgreSQL');
+  if (!config.DB_HOST || !config.DB_PORT || !config.DB_NAME || !config.DB_USER || !config.DB_PASSWORD) {
+    problems.push('DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD are required');
   }
   if (!config.DB_SSL) {
     problems.push('DB_SSL must be enabled for production database connections');
@@ -82,23 +80,17 @@ const prepareDatabase = async () => {
   console.log(`Database ready (${db.describe()})`);
 };
 
-const seedIfNeeded = async () => {
-  if (!config.SEED_DEMO_DATA) return;
-  await require('../../scripts/energy_provider/seedDemoPartner').seedDemoPartner();
-};
-
 const start = async () => {
   try {
     await prepareDatabase();
-    await seedIfNeeded();
   } catch (err) {
     console.error('Database initialisation failed:', err.message);
     throw err;
   }
 
   const server = await new Promise((resolve) => {
-    const listener = app.listen(config.PORT, () => {
-      console.log(`Energy Hub Backend running on http://localhost:${config.PORT}`);
+    const listener = app.listen(config.PORT, config.HOST, () => {
+      console.log(`Energy Hub Backend running at ${getBaseUrl()}`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`JWT Secret configured: ${!!config.JWT_SECRET}`);
       console.log(`CORS Origin: ${config.CORS_ORIGIN}`);
@@ -120,6 +112,5 @@ module.exports = {
   server: serverPromise,
   start,
   prepareDatabase,
-  seedIfNeeded,
   validateProductionConfiguration,
 };

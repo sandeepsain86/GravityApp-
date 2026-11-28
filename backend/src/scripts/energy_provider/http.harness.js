@@ -18,7 +18,9 @@
 
 process.env.DATABASE_URL = 'sqlite://./data/http_smoke.db';
 process.env.NODE_ENV = 'test';
+process.env.HOST = '127.0.0.1';
 process.env.PORT = '5099';
+process.env.BASE_URL = `http://${process.env.HOST}:${process.env.PORT}`;
 
 const fs = require('fs');
 const path = require('path');
@@ -48,7 +50,7 @@ const check = (label, condition, extra) => {
   }
 };
 
-const BASE = 'http://127.0.0.1:5099/api/v1';
+const BASE = `${process.env.BASE_URL}/api/v1`;
 
 const request = async (method, url, { token, body } = {}) => {
   const response = await fetch(`${BASE}${url}`, {

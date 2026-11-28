@@ -7,18 +7,29 @@
     </div>
     <div class="jobs-header-meta">
       <span class="dataset-indicator"><span class="dataset-dot"></span>Live database records</span>
-      <span class="jobs-updated">Changes are session-only</span>
+      <span class="jobs-updated">Dispatch assignments save to the database</span>
     </div>
   </header>
+
+  @if (assignmentError()) {
+    <div class="monitor-error" role="alert">{{ assignmentError() }}</div>
+  }
+  @if (assignmentNotice()) {
+    <div class="monitor-success" role="status">{{ assignmentNotice() }}</div>
+  }
 
   <section class="job-metrics" aria-label="Job queue summary">
     @for (metric of metrics(); track metric.label) {
       <article class="job-metric" [attr.data-tone]="metric.tone">
         <div class="metric-top">
+          <span class="metric-icon menu-icon" [attr.data-icon]="metric.icon" aria-hidden="true"></span>
           <span class="metric-detail">{{ metric.detail }}</span>
         </div>
         <strong class="metric-value">{{ metric.value }}</strong>
         <span class="metric-label">{{ metric.label }}</span>
+        <span class="metric-visual" role="img" [attr.aria-label]="metric.visualLabel">
+          <span [style.width.%]="metric.progress"></span>
+        </span>
       </article>
     }
   </section>
@@ -75,7 +86,8 @@
 
     <div class="job-grid">
       @for (job of filteredJobs(); track job.id) {
-        <article class="job-card" [class.job-card-urgent]="isSlaRisk(job)">
+        <article class="job-card" [class.job-card-urgent]="isSlaRisk(job)"
+          (click)="openCardDetails($event, job.id)">
           <div class="job-card-strip" aria-hidden="true"></div>
           <div class="job-card-body">
             <div class="job-card-top">
@@ -131,12 +143,12 @@
             }
 
             <div class="job-card-actions">
-              @if (!job.partner && job.status !== 'completed') {
+              @if (!job.partner && job.status !== 'completed' && auth.canAccess('jobs', 'edit')) {
                 <label class="quick-assign">
                   <select (change)="assign(job.id, $event)" [attr.aria-label]="'Assign provider for ' + job.id">
                     <option value="">Assign provider…</option>
-                    @for (partner of partnerOptions(); track partner.id) {
-                      <option [value]="partner.name">{{ partner.name }}</option>
+                    @for (partner of partnerOptions(job); track partner.id) {
+                      <option [value]="partner.id">{{ partner.name }} · {{ partner.city }}{{ partnerSkillMatchCount(job, partner) ? ' · skill match' : '' }}</option>
                     }
                   </select>
                 </label>
@@ -144,11 +156,6 @@
               <button type="button" class="job-detail-button" (click)="openDetails(job.id)">
                 View details <span aria-hidden="true">→</span>
               </button>
-              @if (job.status !== 'completed') {
-                <button type="button" class="job-complete-button" (click)="complete(job.id)" aria-label="Mark {{ job.id }} complete">
-                  Complete
-                </button>
-              }
             </div>
           </div>
         </article>
@@ -162,6 +169,21 @@
           }
         </div>
       }
+    </div>
+  </section>
+
+  <section class="job-overview panel" aria-labelledby="job-overview-title">
+    <div class="panel-head live-panel-heading">
+      <div class="job-overview-copy">
+        <span class="panel-eyebrow">LIVE WORKLOAD</span>
+        <div class="panel-title" id="job-overview-title">Queue health</div>
+        <p class="chart-panel-description">Current jobs grouped by assignment, delivery, SLA risk and completion.</p>
+      </div>
+      <span class="live-badge"><span class="live-indicator"></span> Live</span>
+    </div>
+    <div class="panel-body">
+      <app-admin-chart type="bar" [compact]="true" [labels]="['Unassigned', 'In progress', 'SLA risk', 'Completed']"
+        [datasets]="queueChartDatasets()" label="Jobs grouped by current status" />
     </div>
   </section>
 
@@ -269,15 +291,24 @@
                 <h3>Partner assignment</h3>
               </div>
             </div>
-            <label class="assignment-control">
-              <span>Service partner</span>
-              <select [value]="job.partner || ''" [disabled]="job.status === 'completed'" (change)="assign(job.id, $event)">
-                <option value="">{{ job.partner ? 'Unassign current partner' : 'Choose a service partner' }}</option>
-                @for (partner of partnerOptions(); track partner.id) {
-                  <option [value]="partner.name">{{ partner.name }} · {{ partner.city }}</option>
-                }
-              </select>
-            </label>
+            @if (auth.canAccess('jobs', 'edit')) {
+              <label class="assignment-control">
+                <span>Service partner</span>
+                <select [value]="job.partnerId ?? ''" [disabled]="job.status === 'completed'" (change)="assign(job.id, $event)">
+                  <option value="">{{ job.partner ? 'Unassign current partner' : 'Choose a service partner' }}</option>
+                  @if (job.partnerId) {
+                    <option [value]="job.partnerId">{{ job.partner }} · current</option>
+                  }
+                  @for (partner of partnerOptions(job); track partner.id) {
+                    @if (partner.id !== job.partnerId) {
+                      <option [value]="partner.id">{{ partner.name }} · {{ partner.city }}{{ partnerSkillMatchCount(job, partner) ? ' · skill match' : '' }}</option>
+                    }
+                  }
+                </select>
+              </label>
+            } @else {
+              <div class="detail-block"><span>Service partner</span><strong>{{ job.partner || 'Unassigned' }}</strong></div>
+            }
             <div class="detail-grid delivery-facts">
               <div class="detail-block">
                 <span>Estimated effort</span>
@@ -293,101 +324,81 @@
           <section class="drawer-section workflow-section">
             <div class="drawer-section-heading">
               <div>
-                <span class="section-kicker">DELIVERY WORKFLOW</span>
-                <h3>Stage, schedule & checks</h3>
+                <span class="section-kicker">DATABASE WORKFLOW</span>
+                <h3>Persisted delivery status</h3>
               </div>
-              <span class="session-only-label job-id">Session only</span>
             </div>
-
             <div class="delivery-stage-current">
               <div>
                 <span>Current stage</span>
-                <strong>{{ ops.stageLabel(ops.jobStage(job)) }}</strong>
+                <strong>{{ stageLabel(job) }}</strong>
               </div>
-              @if (ops.nextJobStage(job); as nextStage) {
-                <button type="button" class="workflow-action job-detail-button"
-                  [disabled]="!ops.canAdvanceJobStage(job)"
-                  (click)="advanceStage(job.id)">
-                  Advance to {{ ops.stageLabel(nextStage) }}
-                </button>
-              }
+              <span class="stage-age">Current stage age · {{ stageAge(job) }}</span>
             </div>
-            <ol class="delivery-stage-list" aria-label="Job delivery stages">
-              @for (stage of deliveryStages; track stage; let index = $index) {
-                <li [class.done]="index < stageIndex(job)" [class.current]="index === stageIndex(job)">
-                  <span>{{ index + 1 }}</span>
-                  <strong>{{ ops.stageLabel(stage) }}</strong>
-                </li>
-              }
-            </ol>
-            @if (stageRequirement(job); as requirement) {
-              <p class="workflow-hint">{{ requirement }}</p>
-            }
-
-            <div class="schedule-control">
-              <label class="workflow-field assignment-control">
-                <span>Service visit date and time</span>
-                <input #visitSchedule type="datetime-local"
-                  [value]="scheduleInputValue(job.scheduledAt)"
-                  [disabled]="job.status === 'completed'" />
-              </label>
-              <button type="button" class="workflow-action job-detail-button"
-                [disabled]="job.status === 'completed'"
-                (click)="scheduleJob(job.id, visitSchedule.value)">
-                Save schedule
-              </button>
-              @if (job.scheduledAt) {
-                <span class="saved-schedule">Scheduled {{ formatDate(job.scheduledAt) }}</span>
-              }
+            <div class="detail-grid delivery-facts">
+              <div class="detail-block">
+                <span>Saved visit schedule</span>
+                <strong>{{ formatDate(job.scheduledAt) }}</strong>
+              </div>
+              <div class="detail-block">
+                <span>Completion time</span>
+                <strong>{{ formatDate(job.completedAt) }}</strong>
+              </div>
+              <div class="detail-block">
+                <span>Before photos</span>
+                <strong>{{ job.beforePhotoCount ?? 0 }}</strong>
+              </div>
+              <div class="detail-block">
+                <span>After photos</span>
+                <strong>{{ job.afterPhotoCount ?? 0 }}</strong>
+              </div>
             </div>
-            @if (scheduleNotice()) {
-              <p class="workflow-hint" aria-live="polite">{{ scheduleNotice() }}</p>
-            }
-
-            <div class="checklist-heading">
-              <strong>Service checklist</strong>
-              <span>{{ completedChecklistCount(job) }} of {{ ops.jobChecklist(job).length }} complete</span>
-            </div>
-            <div class="job-checklist">
-              @for (item of ops.jobChecklist(job); track item.id) {
-                <label class="checklist-item" [class.done]="item.done">
-                  <input type="checkbox" [checked]="item.done" [disabled]="job.status === 'completed'"
-                    (change)="ops.toggleJobChecklistItem(job.id, item.id)" />
-                  <span>{{ item.label }}</span>
-                </label>
-              }
-            </div>
-
-            <div class="work-note-control">
-              <label class="workflow-field assignment-control">
-                <span>Add work note</span>
-                <textarea maxlength="500" rows="3" [value]="workNoteDraft()"
-                  (input)="setWorkNoteDraft($event)"
-                  placeholder="Record progress, findings or a handover detail"></textarea>
-              </label>
-              <button type="button" class="workflow-action job-detail-button"
-                [disabled]="!workNoteDraft().trim()"
-                (click)="addWorkNote(job.id)">
-                Save work note
-              </button>
-              @if (workNoteError()) {
-                <p class="workflow-error" role="alert">{{ workNoteError() }}</p>
-              }
-              @if (workNoteNotice()) {
-                <p class="workflow-hint" aria-live="polite">{{ workNoteNotice() }}</p>
-              }
-            </div>
-            @if (job.workNotes?.length) {
-              <div class="work-notes">
-                <strong>Recorded work notes</strong>
-                @for (note of job.workNotes; track note.at + note.detail) {
-                  <article>
-                    <time [attr.datetime]="note.at">{{ formatDate(note.at) }}</time>
-                    <p>{{ note.detail }}</p>
-                  </article>
+            <p class="workflow-hint">
+              Field stages, proof and completion are managed by the provider workflow. This console shows saved records; it does not simulate changes locally.
+            </p>
+            @if (job.checklist?.length) {
+              <div class="job-checklist">
+                @for (item of job.checklist; track item.id) {
+                  <div class="checklist-item" [class.done]="item.done">
+                    <span aria-hidden="true">{{ item.done ? '✓' : '○' }}</span>
+                    <span>{{ item.label }}</span>
+                  </div>
                 }
               </div>
+            } @else {
+              <p class="timeline-empty">No saved checklist is available for this job.</p>
             }
+            <div class="work-notes">
+              <strong>Stage history</strong>
+              @for (entry of job.stageHistory ?? []; track entry.at + entry.toStage) {
+                <article>
+                  <time [attr.datetime]="entry.at">{{ formatDate(entry.at) }}</time>
+                  <p>{{ entry.fromStage || 'Created' }} → {{ entry.toStage || 'Stage updated' }}{{ entry.note ? ' · ' + entry.note : '' }}</p>
+                </article>
+              } @empty {
+                <p class="timeline-empty">No stage transitions have been recorded.</p>
+              }
+            </div>
+          </section>
+
+          <section class="drawer-section">
+            <div class="drawer-section-heading">
+              <div>
+                <span class="section-kicker">RECORDED FINANCIALS</span>
+                <h3>Job contribution</h3>
+              </div>
+            </div>
+            <div class="detail-grid delivery-facts">
+              <div class="detail-block"><span>Stored customer bill</span><strong>{{ job.totalBill === null || job.totalBill === undefined ? 'Not recorded' : formatCurrency(job.totalBill) }}</strong></div>
+              <div class="detail-block"><span>Stored partner payout</span><strong>{{ job.payoutAmount === null || job.payoutAmount === undefined ? 'Not recorded' : formatCurrency(job.payoutAmount) }}</strong></div>
+              <div class="detail-block"><span>Stored parts cost</span><strong>{{ job.partsTotal === null || job.partsTotal === undefined ? 'Not recorded' : formatCurrency(job.partsTotal) }}</strong></div>
+              <div class="detail-block"><span>Bill - payout - parts</span><strong>{{ recordedContributionLabel(job) }}</strong></div>
+            </div>
+            <p class="workflow-hint">Recorded contribution is not net profit; tax, overhead and unrecorded costs are not included.</p>
+            <div class="detail-block">
+              <span>Asset history</span>
+              <strong>Not linked to a registered device record</strong>
+            </div>
           </section>
 
           <section class="drawer-section">
@@ -420,10 +431,10 @@
         </div>
 
         <footer class="drawer-footer">
-          @if (job.status !== 'completed') {
-            <button type="button" class="drawer-complete-button" (click)="complete(job.id)">Mark job complete</button>
-          } @else {
+          @if (job.status === 'completed') {
             <span class="drawer-done-label"><span aria-hidden="true">✓</span> Completed</span>
+          } @else {
+            <span class="workflow-hint">Completion is recorded by the provider after required proof and OTP checks.</span>
           }
           <button type="button" class="drawer-secondary-button" (click)="closeDetails()">Close details</button>
         </footer>

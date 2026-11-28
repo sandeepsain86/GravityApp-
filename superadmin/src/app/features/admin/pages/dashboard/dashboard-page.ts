@@ -4,6 +4,7 @@ import type { AdminUser, PageKey, PlatformRegistration, Role } from '../../../..
 import { AdminApiService } from '../../../../core/services/admin-api.service';
 import { AuthService } from '../../../../core/services/auth.service';
 import { OperationsService, type Job } from '../../../../core/services/operations.service';
+import { AdminChart } from '../../../../shared/admin-chart/admin-chart';
 
 type CustomerFilter = 'all' | 'active' | 'follow-up';
 
@@ -14,6 +15,9 @@ interface DashboardMetric {
   route: string;
   page: PageKey;
   tone: 'primary' | 'accent' | 'warn' | 'danger';
+  icon: string;
+  visualLabel: string;
+  segments: Array<{ tone: 'primary' | 'accent' | 'warn' | 'danger'; percentage: number }>;
 }
 
 interface AttentionItem {
@@ -37,7 +41,7 @@ interface DashboardInsight {
 
 @Component({
   selector: 'app-dashboard-page',
-  imports: [RouterLink],
+  imports: [RouterLink, AdminChart],
   templateUrl: './dashboard-page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -52,6 +56,7 @@ export class DashboardPage {
   readonly platformDataErrors = signal<string[]>([]);
   readonly revenueMonths = signal<3 | 6>(6);
   readonly customerFilter = signal<CustomerFilter>('all');
+  readonly showTestAccounts = signal(false);
 
   constructor() {
     void this.loadPlatformData();
@@ -67,6 +72,8 @@ export class DashboardPage {
     const energyHubAccounts = registrations.filter((registration) => registration.app === 'energy-hub').length;
     const serviceAdminAccounts = registrations.filter((registration) => registration.app === 'service-admin').length;
     const activeUsers = this.consoleUsers().filter((user) => !user.disabled).length;
+    const openJobs = this.ops.liveJobs().length;
+    const percent = (part: number, total: number) => total ? Math.round((part / total) * 100) : 0;
     const candidates: DashboardMetric[] = [
       {
         label: 'Platform registrations',
@@ -75,6 +82,12 @@ export class DashboardPage {
         route: '/directory',
         page: 'directory',
         tone: 'primary',
+        icon: 'users',
+        visualLabel: 'Registration sources: Energy Hub and Service Admin',
+        segments: [
+          { tone: 'primary', percentage: percent(energyHubAccounts, registrations.length) },
+          { tone: 'accent', percentage: percent(serviceAdminAccounts, registrations.length) },
+        ],
       },
       {
         label: 'Console users',
@@ -83,6 +96,12 @@ export class DashboardPage {
         route: '/modules/users',
         page: 'users',
         tone: 'accent',
+        icon: 'shield',
+        visualLabel: 'Active console accounts',
+        segments: [
+          { tone: 'accent', percentage: percent(activeUsers, this.consoleUsers().length) },
+          { tone: 'primary', percentage: percent(this.consoleUsers().length - activeUsers, this.consoleUsers().length) },
+        ],
       },
       {
         label: 'Provider rating',
@@ -91,14 +110,23 @@ export class DashboardPage {
         route: '/directory',
         page: 'directory',
         tone: averageRating !== null && averageRating < 4 ? 'warn' : 'primary',
+        icon: 'chart',
+        visualLabel: 'Average provider rating out of five',
+        segments: [{ tone: 'primary', percentage: percent(averageRating ?? 0, 5) }],
       },
       {
         label: 'SLA-risk jobs',
         value: `${riskCount}`,
-        context: `${this.ops.liveJobs().length} open jobs in connected database records`,
+        context: `${openJobs} open jobs in connected database records`,
         route: '/jobs',
         page: 'jobs',
         tone: riskCount ? 'danger' : 'accent',
+        icon: 'pulse',
+        visualLabel: 'SLA-risk jobs as a share of the open queue',
+        segments: [
+          { tone: 'danger', percentage: percent(riskCount, openJobs) },
+          { tone: 'primary', percentage: percent(openJobs - riskCount, openJobs) },
+        ],
       },
     ];
     return candidates.filter((metric) => this.auth.canAccess(metric.page));
@@ -114,24 +142,16 @@ export class DashboardPage {
       ...item,
       count: registrations.filter((registration) => registration.app === item.app).length,
     }));
-    const total = registrations.length;
-    let offset = 0;
-    const segments = items.map((item) => {
-      const start = offset;
-      offset += total ? item.count / total * 100 : 0;
-      return `${item.color} ${start}% ${offset}%`;
-    });
-
-    return {
-      total,
-      items,
-      donutStyle: {
-        background: total
-          ? `radial-gradient(var(--surface) 58%, transparent 60%), conic-gradient(${segments.join(', ')})`
-          : 'var(--surface-2)',
-      },
-    };
+    return { total: registrations.length, items };
   });
+
+  readonly registrationChartDatasets = computed(() => [{
+    label: 'Registrations',
+    data: this.appBreakdown().items.map((item) => item.count),
+    backgroundColor: ['#20b8a8', '#8b7bff'],
+    borderRadius: 7,
+    borderSkipped: false,
+  }]);
 
   readonly roleBreakdown = computed(() => {
     const users = this.consoleUsers();
@@ -170,38 +190,48 @@ export class DashboardPage {
       ),
   );
 
+  readonly portfolioCompanies = computed(() =>
+    this.ops.companies.filter((company) =>
+      this.showTestAccounts() || !this.isTestAccount(company.name),
+    ),
+  );
+
   readonly customerPerformance = computed(() => {
     const filter = this.customerFilter();
-    const companies = this.ops.companies
+    const companies = this.portfolioCompanies()
       .filter((company) =>
         filter === 'all' ||
         (filter === 'active' ? company.amc === 'Active' : company.amc !== 'Active'),
       )
       .sort((a, b) => b.revenue - a.revenue);
     const maximumRevenue = Math.max(...companies.map((company) => company.revenue), 1);
-    const totalRevenue = this.ops.companies.reduce((sum, company) => sum + company.revenue, 0);
+    const totalRevenue = this.portfolioCompanies().reduce((sum, company) => sum + company.revenue, 0);
     return companies.map((company) => ({
       ...company,
       revenuePercent: Math.round((company.revenue / maximumRevenue) * 100),
       portfolioShare: totalRevenue ? Math.round((company.revenue / totalRevenue) * 100) : 0,
+      churnRisk: this.isChurnRisk(company),
     }));
   });
 
   readonly customerSummary = computed(() => ({
-    companies: this.ops.companies.length,
-    users: this.ops.companies.reduce((sum, company) => sum + company.users, 0),
-    sites: this.ops.companies.reduce((sum, company) => sum + company.sites, 0),
-    followUp: this.ops.companies.filter((company) => company.amc !== 'Active').length,
+    companies: this.portfolioCompanies().length,
+    users: this.portfolioCompanies().reduce((sum, company) => sum + company.users, 0),
+    sites: this.portfolioCompanies().reduce((sum, company) => sum + company.sites, 0),
+    followUp: this.portfolioCompanies().filter((company) => company.amc !== 'Active').length,
+    churnRisk: this.portfolioCompanies().filter((company) => this.isChurnRisk(company)).length,
   }));
 
   readonly smartInsights = computed(() => {
     const candidates: DashboardInsight[] = [];
     const riskJobs = this.ops.slaRiskJobs();
-    const unassignedJobs = this.ops.jobs().filter((job) => job.status === 'unassigned');
+    const unassignedJobs = this.ops.unassignedJobs();
     const expiringAmcs = this.ops.expiringAmcs();
     const overdueInvoices = this.ops.invoices().filter((invoice) => invoice.status === 'overdue');
-    const largestCustomer = [...this.ops.companies].sort((a, b) => b.revenue - a.revenue)[0];
-    const customerRevenue = this.ops.companies.reduce((sum, company) => sum + company.revenue, 0);
+    const companies = this.portfolioCompanies();
+    const churnRiskCompanies = companies.filter((company) => this.isChurnRisk(company));
+    const largestCustomer = [...companies].sort((a, b) => b.revenue - a.revenue)[0];
+    const customerRevenue = companies.reduce((sum, company) => sum + company.revenue, 0);
     const lowestRatedProvider = this.registrations()
       .filter((registration) => registration.profile.rating !== null)
       .sort((a, b) => (a.profile.rating ?? 0) - (b.profile.rating ?? 0))[0];
@@ -246,10 +276,20 @@ export class DashboardPage {
         tone: 'danger',
       });
     }
+    if (churnRiskCompanies.length && this.auth.canAccess('companies')) {
+      candidates.push({
+        title: `${churnRiskCompanies.length} customer${churnRiskCompanies.length === 1 ? '' : 's'} have no recent service activity`,
+        detail: 'These accounts have no recorded service or repair activity in the last 60 days, regardless of AMC status.',
+        action: 'Review customers',
+        route: '/companies',
+        page: 'companies',
+        tone: 'warn',
+      });
+    }
     if (
       largestCustomer &&
       customerRevenue > 0 &&
-      largestCustomer.revenue / customerRevenue >= 0.4 &&
+      largestCustomer.revenue / customerRevenue > 0.5 &&
       this.auth.canAccess('companies')
     ) {
       candidates.push({
@@ -390,6 +430,17 @@ export class DashboardPage {
     }));
   });
 
+  readonly revenueChartDatasets = computed(() => [{
+    label: 'Service earnings',
+    data: this.revenueTrend().map((point) => point.value),
+    borderColor: '#42e8d5',
+    backgroundColor: 'rgba(66, 232, 213, .16)',
+    fill: true,
+    tension: 0.4,
+    pointRadius: 3,
+    pointHoverRadius: 6,
+  }]);
+
   readonly jobStatusBreakdown = computed(() => {
     const jobs = this.ops.jobs();
     const statuses: { status: Job['status']; label: string; color: string }[] = [
@@ -441,6 +492,11 @@ export class DashboardPage {
     }
   }
 
+  setShowTestAccounts(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.showTestAccounts.set(target.checked);
+  }
+
   formatRating(value: number | null): string {
     return value === null ? '—' : value.toFixed(1);
   }
@@ -453,6 +509,17 @@ export class DashboardPage {
   private experienceValue(value: string | null): number {
     const match = value?.match(/\d+(?:\.\d+)?/);
     return match ? Number(match[0]) : 0;
+  }
+
+  private isTestAccount(name: string): boolean {
+    return /(^|[\s._-])(test|demo|sandbox|qa)(?:$|[\s._-])/i.test(name);
+  }
+
+  private isChurnRisk(company: { lastActivityAt?: string | null }): boolean {
+    if (!company.lastActivityAt) return false;
+    const lastActivity = Date.parse(company.lastActivityAt);
+    return Number.isFinite(lastActivity) &&
+      Date.now() - lastActivity > 60 * 24 * 60 * 60 * 1000;
   }
 
   private async loadRegistrations(): Promise<void> {
@@ -481,6 +548,17 @@ export class DashboardPage {
       currency: 'INR',
       maximumFractionDigits: 0,
     }).format(value);
+  }
+
+  formatDate(value: string | null | undefined): string {
+    if (!value) return 'unknown';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'unknown';
+    return new Intl.DateTimeFormat('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(date);
   }
 
   jobStatusLabel(job: Job): string {

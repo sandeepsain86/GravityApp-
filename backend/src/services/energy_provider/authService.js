@@ -76,7 +76,7 @@ const AuthService = {
       throw ApiError.badRequest(`Please wait ${waitSeconds}s before requesting a new OTP`);
     }
 
-    const otp = generateOtp(mobile, config);
+    const otp = generateOtp();
     await deliverOtp(mobile, otp);
     const record = await OtpModel.create(mobile, {
       otp,

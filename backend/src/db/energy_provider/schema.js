@@ -8,9 +8,8 @@
  *    documented next to them
  *  - `created_at` / `updated_at` are maintained by the application layer
  *
- * The same declaration is rendered to MySQL 8 and SQLite, so the product can be
- * pointed at a hosted MySQL instance through DATABASE_URL without any code
- * change, while still running locally with zero setup.
+ * The same declaration is rendered for PostgreSQL, MySQL, and isolated SQLite
+ * smoke tests. Runtime PostgreSQL connection settings come from the shared DB_* environment.
  */
 
 const tables = {
@@ -202,6 +201,7 @@ const tables = {
       stage: { type: 'text' },
       // partner assigned to the job
       assigned_partner_id: { type: 'int', references: { table: 'users', column: 'id' } },
+      assigned_at: { type: 'datetime' },
       scheduled_at: { type: 'text' },
       sla_due_at: { type: 'datetime' },
       sla_paused: { type: 'bool', default: 0 },

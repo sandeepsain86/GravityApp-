@@ -17,7 +17,7 @@ import type {
 import { InvalidProfileImageError, JsonStore, StoreConflictError } from '../infrastructure/json-store.js';
 import { AccessControlService, InputError, NotFoundError } from '../services/access-control.js';
 import { AuthenticationService, PasswordChangeError } from '../services/authentication.js';
-import { SessionManager } from '../services/sessions.js';
+import { InvalidSessionError, SessionManager } from '../services/sessions.js';
 import {
   readSessionCredential,
   requireAuth,
@@ -31,13 +31,81 @@ interface ApiDependencies {
   authentication: AuthenticationService;
   sessions: SessionManager;
   secureCookies: boolean;
-  localDemoCredentials?: { email: string; password: string } | null;
   platformDirectory?: {
     listRegistrations(): Promise<PlatformRegistration[]>;
     getRegistrationDetails(id: string): Promise<PlatformRegistrationDetails | null>;
   };
   operationsDirectory?: {
     getData(domain: string): Promise<unknown>;
+    assignJob?(reference: string, partnerId: string | null, actor: StoredUser): Promise<{
+      changed: boolean;
+      jobId: string;
+      reference: string;
+      partnerId: string | null;
+      partnerName?: string;
+      assignedAt?: string;
+    }>;
+    transitionRepairStage?(
+      reference: string,
+      stage: string,
+      remarks: string,
+      details: Record<string, unknown>,
+      actor: StoredUser,
+    ): Promise<{
+      id: string;
+      ticketNumber: string;
+      status: string;
+      stage: string;
+      fromStatus: string;
+      updatedAt: string;
+    }>;
+    updateRepairWorkshop?(
+      reference: string,
+      changes: {
+        benchPartnerId?: string | null;
+        partRequest?: { sku: string; quantity: number };
+      },
+      actor: StoredUser,
+    ): Promise<{
+      id: string;
+      ticketNumber: string;
+      status: string;
+      stage: string;
+      fromStatus: string;
+      updatedAt: string;
+    }>;
+    assignRepairPartnerToMany?(
+      references: string[],
+      partnerId: string,
+      actor: StoredUser,
+    ): Promise<{
+      partnerId: string;
+      partnerName: string;
+      repairs: Array<{
+        id: string;
+        ticketNumber: string;
+        status: string;
+        stage: string;
+        fromStatus: string;
+        updatedAt: string;
+      }>;
+    }>;
+    transitionProjectStatus?(
+      reference: string,
+      status: string,
+      note: string,
+      actor: StoredUser,
+    ): Promise<{ id: string; request_number: string; status: string; updated_at: string }>;
+    createProjectMilestone?(
+      reference: string,
+      input: Record<string, unknown>,
+      actor: StoredUser,
+    ): Promise<Record<string, unknown>>;
+    updateProjectMilestone?(
+      reference: string,
+      milestoneId: string,
+      input: Record<string, unknown>,
+    ): Promise<Record<string, unknown>>;
   };
 }
 
@@ -57,16 +125,10 @@ const OPERATION_PAGES: Record<string, string> = {
   'partner-app': 'partner-app',
 };
 
+const IMPERSONATION_AUDIT_REASON = 'Superadmin initiated user-panel access';
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function isLoopbackAddress(address: string | undefined): boolean {
-  const normalized = address?.toLowerCase();
-  if (!normalized) return false;
-  return normalized === '::1' ||
-    /^127(?:\.\d{1,3}){3}$/.test(normalized) ||
-    /^::ffff:127(?:\.\d{1,3}){3}$/.test(normalized);
 }
 
 function publicUser(user: StoredUser) {
@@ -164,7 +226,6 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
     authentication,
     sessions,
     secureCookies,
-    localDemoCredentials,
     platformDirectory,
     operationsDirectory,
   } = dependencies;
@@ -198,12 +259,365 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
     },
   );
 
-  router.get('/auth/local-demo', (request, response): void => {
-    const isLocalRequest = isLoopbackAddress(request.socket.remoteAddress);
-    response.json(localDemoCredentials && isLocalRequest
-      ? { enabled: true, credentials: localDemoCredentials }
-      : { enabled: false });
-  });
+  router.patch(
+    '/admin/operations/projects/:projectId/status',
+    authenticate,
+    requirePermission(access, 'projects', 'edit'),
+    async (request, response): Promise<void> => {
+      const projectId = request.params['projectId'];
+      const body = request.body as Record<string, unknown> | undefined;
+      if (typeof projectId !== 'string' || !body ||
+          Object.keys(body).some((key) => !['status', 'note'].includes(key)) ||
+          typeof body.status !== 'string' ||
+          (body.note !== undefined && (typeof body.note !== 'string' || body.note.length > 500))) {
+        response.status(400).json({ message: 'Provide a valid project status and an optional note of at most 500 characters.' });
+        return;
+      }
+      if (!operationsDirectory?.transitionProjectStatus) {
+        response.status(503).json({ message: 'The project workflow is unavailable.' });
+        return;
+      }
+      try {
+        const project = await operationsDirectory.transitionProjectStatus(
+          projectId,
+          body.status,
+          typeof body.note === 'string' ? body.note.trim() : '',
+          request.authUser!,
+        );
+        await store.recordAudit(
+          request.authUser!,
+          'projects.status_changed',
+          'project_request',
+          project.request_number,
+          { id: project.id, status: project.status },
+        );
+        response.json({ project });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'Project status could not be changed.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  router.post(
+    '/admin/operations/projects/:projectId/milestones',
+    authenticate,
+    requirePermission(access, 'projects', 'edit'),
+    async (request, response): Promise<void> => {
+      const projectId = request.params['projectId'];
+      const body = request.body as Record<string, unknown> | undefined;
+      if (typeof projectId !== 'string' || !body) {
+        response.status(400).json({ message: 'Provide valid project milestone details.' });
+        return;
+      }
+      if (!operationsDirectory?.createProjectMilestone) {
+        response.status(503).json({ message: 'Project milestone management is unavailable.' });
+        return;
+      }
+      try {
+        const milestone = await operationsDirectory.createProjectMilestone(
+          projectId,
+          body,
+          request.authUser!,
+        );
+        await store.recordAudit(
+          request.authUser!,
+          'projects.milestone_created',
+          'project_milestone',
+          String(milestone.id),
+          { projectId, title: milestone.title, dueDate: milestone.due_date },
+        );
+        response.status(201).json({ milestone });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'Project milestone could not be created.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/operations/projects/:projectId/milestones/:milestoneId',
+    authenticate,
+    requirePermission(access, 'projects', 'edit'),
+    async (request, response): Promise<void> => {
+      const projectId = request.params['projectId'];
+      const milestoneId = request.params['milestoneId'];
+      const body = request.body as Record<string, unknown> | undefined;
+      if (typeof projectId !== 'string' || typeof milestoneId !== 'string' || !body) {
+        response.status(400).json({ message: 'Provide valid project milestone details.' });
+        return;
+      }
+      if (!operationsDirectory?.updateProjectMilestone) {
+        response.status(503).json({ message: 'Project milestone management is unavailable.' });
+        return;
+      }
+      try {
+        const milestone = await operationsDirectory.updateProjectMilestone(projectId, milestoneId, body);
+        await store.recordAudit(
+          request.authUser!,
+          'projects.milestone_updated',
+          'project_milestone',
+          String(milestone.id),
+          { projectId, status: milestone.status, clientSignoffStatus: milestone.client_signoff_status },
+        );
+        response.json({ milestone });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'Project milestone could not be updated.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/operations/jobs/:jobId/assignment',
+    authenticate,
+    requirePermission(access, 'jobs', 'edit'),
+    async (request, response): Promise<void> => {
+      const jobId = request.params['jobId'];
+      const body = request.body as Record<string, unknown> | undefined;
+      if (typeof jobId !== 'string' || !body ||
+          !('partnerId' in body) ||
+          (body.partnerId !== null && typeof body.partnerId !== 'string')) {
+        response.status(400).json({ message: 'A job reference and partner ID (or null to unassign) are required.' });
+        return;
+      }
+      if (!operationsDirectory?.assignJob) {
+        response.status(503).json({ message: 'The job dispatch service is unavailable.' });
+        return;
+      }
+      try {
+        const result = await operationsDirectory.assignJob(jobId, body.partnerId as string | null, request.authUser!);
+        if (result.changed) {
+          await store.recordAudit(
+            request.authUser!,
+            result.partnerId ? 'jobs.partner_assigned' : 'jobs.partner_unassigned',
+            'job',
+            result.reference,
+            { partnerId: result.partnerId, providerJobId: result.jobId },
+          );
+        }
+        response.json({ assignment: result });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'Job assignment could not be completed.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/operations/repairs/assignment',
+    authenticate,
+    requirePermission(access, 'repair', 'edit'),
+    async (request, response): Promise<void> => {
+      const body = request.body as Record<string, unknown> | undefined;
+      const references = body?.references;
+      if (!body ||
+          Object.keys(body).some((key) => !['references', 'partnerId'].includes(key)) ||
+          !Array.isArray(references) ||
+          references.length < 1 ||
+          references.length > 100 ||
+          references.some((reference) =>
+            typeof reference !== 'string' || reference.trim().length === 0 || reference.length > 120,
+          ) ||
+          typeof body.partnerId !== 'string' ||
+          body.partnerId.trim().length === 0 ||
+          body.partnerId.length > 120) {
+        response.status(400).json({ message: 'Select between 1 and 100 repair tickets and a valid partner.' });
+        return;
+      }
+      if (!operationsDirectory?.assignRepairPartnerToMany) {
+        response.status(503).json({ message: 'Bulk repair assignment is unavailable.' });
+        return;
+      }
+      try {
+        const result = await operationsDirectory.assignRepairPartnerToMany(
+          references.map((reference) => reference.trim()),
+          body.partnerId.trim(),
+          request.authUser!,
+        );
+        await store.recordAudit(
+          request.authUser!,
+          'repair.partner_bulk_assigned',
+          'repair_ticket',
+          result.partnerName,
+          { partnerId: result.partnerId, ticketCount: result.repairs.length },
+        );
+        response.json({ assignment: result });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'Bulk repair assignment failed.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/operations/repairs/:ticketId/workshop',
+    authenticate,
+    requirePermission(access, 'repair', 'edit'),
+    async (request, response): Promise<void> => {
+      const ticketId = request.params['ticketId'];
+      const body = request.body as Record<string, unknown> | undefined;
+      const partRequest = body?.partRequest;
+      const validPartRequest = isRecord(partRequest) &&
+        Object.keys(partRequest).every((key) => key === 'sku' || key === 'quantity') &&
+        typeof partRequest.sku === 'string' &&
+        partRequest.sku.trim().length > 0 &&
+        partRequest.sku.length <= 120 &&
+        typeof partRequest.quantity === 'number' &&
+        Number.isInteger(partRequest.quantity) &&
+        Number(partRequest.quantity) >= 1 &&
+        Number(partRequest.quantity) <= 1000;
+      if (typeof ticketId !== 'string' || !body ||
+          Object.keys(body).some((key) => !['benchPartnerId', 'partRequest'].includes(key)) ||
+          (!('benchPartnerId' in body) && !('partRequest' in body)) ||
+          ('benchPartnerId' in body &&
+            body.benchPartnerId !== null &&
+            (typeof body.benchPartnerId !== 'string' ||
+              body.benchPartnerId.trim().length === 0 ||
+              body.benchPartnerId.length > 120)) ||
+          ('partRequest' in body && !validPartRequest)) {
+        response.status(400).json({ message: 'Provide a valid partner assignment or inventory part request.' });
+        return;
+      }
+      if (!operationsDirectory?.updateRepairWorkshop) {
+        response.status(503).json({ message: 'The repair workshop integration is unavailable.' });
+        return;
+      }
+      try {
+        const repair = await operationsDirectory.updateRepairWorkshop(
+          ticketId,
+          {
+            ...('benchPartnerId' in body
+              ? { benchPartnerId: body.benchPartnerId as string | null }
+              : {}),
+            ...(validPartRequest
+              ? {
+                  partRequest: {
+                    sku: partRequest.sku.trim(),
+                    quantity: Number(partRequest.quantity),
+                  },
+                }
+              : {}),
+          },
+          request.authUser!,
+        );
+        await store.recordAudit(
+          request.authUser!,
+          'repair.workshop_updated',
+          'repair_ticket',
+          repair.ticketNumber,
+          {
+            id: repair.id,
+            partnerId: 'benchPartnerId' in body ? body.benchPartnerId as string | null : null,
+            partRequested: validPartRequest,
+          },
+        );
+        response.json({ repair });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'Workshop details could not be updated.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
+
+  router.patch(
+    '/admin/operations/repairs/:ticketId/stage',
+    authenticate,
+    requirePermission(access, 'repair', 'edit'),
+    async (request, response): Promise<void> => {
+      const ticketId = request.params['ticketId'];
+      const body = request.body as Record<string, unknown> | undefined;
+      const validStages = ['received', 'diagnosis', 'quote_approval', 'repairing', 'qc_passed', 'delivered'];
+      if (typeof ticketId !== 'string' || !body ||
+          Object.keys(body).some((key) => !['stage', 'remarks', 'estimatedCost', 'quoteApproved', 'parts', 'benchPartnerId', 'benchPartnerName'].includes(key)) ||
+          typeof body.stage !== 'string' || !validStages.includes(body.stage) ||
+          (body.remarks !== undefined &&
+            (typeof body.remarks !== 'string' || body.remarks.length > 500))) {
+        response.status(400).json({ message: 'A valid repair stage and an optional note of at most 500 characters are required.' });
+        return;
+      }
+      if (!operationsDirectory?.transitionRepairStage) {
+        response.status(503).json({ message: 'The repair workflow service is unavailable.' });
+        return;
+      }
+      try {
+        const repair = await operationsDirectory.transitionRepairStage(
+          ticketId,
+          body.stage,
+          typeof body.remarks === 'string' ? body.remarks.trim() : '',
+          body,
+          request.authUser!,
+        );
+        await store.recordAudit(
+          request.authUser!,
+          'repair.stage_changed',
+          'repair_ticket',
+          repair.ticketNumber,
+          { id: repair.id, fromStatus: repair.fromStatus, stage: repair.stage, status: repair.status },
+        );
+        response.json({ repair });
+      } catch (error) {
+        const statusCode = error instanceof Error && 'statusCode' in error
+          ? error.statusCode
+          : undefined;
+        if (typeof statusCode === 'number' && [400, 404, 409].includes(statusCode)) {
+          response.status(statusCode).json({
+            message: error instanceof Error ? error.message : 'The repair stage could not be changed.',
+          });
+          return;
+        }
+        throw error;
+      }
+    },
+  );
 
   router.post('/auth/login', async (request, response): Promise<void> => {
     const body = request.body as Record<string, unknown> | undefined;
@@ -216,22 +630,13 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
       response.status(400).json({ message: 'Email or password is invalid.' });
       return;
     }
-    if (
-      localDemoCredentials &&
-      body.email.trim().toLowerCase() === localDemoCredentials.email &&
-      !isLoopbackAddress(request.socket.remoteAddress)
-    ) {
-      response.status(401).json({ message: 'Invalid email or password.' });
-      return;
-    }
-
     const user = await authentication.authenticate(body.email, body.password, request.ip ?? 'unknown');
     if (!user) {
       response.status(401).json({ message: 'Invalid email or password.' });
       return;
     }
 
-    const session = sessions.create(user.id);
+    const session = await sessions.create(user.id);
     response.json({
       user: await access.sessionUser(user),
       expiresAt: session.expiresAt,
@@ -243,11 +648,11 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
   router.get('/auth/me', async (request, response): Promise<void> => {
     const credential = readSessionCredential(request.headers.cookie, request.headers.authorization);
     const sessionId = credential.sessionId;
-    const session = sessionId ? sessions.get(sessionId) : undefined;
+    const session = sessionId ? await sessions.get(sessionId) : undefined;
     const user = session ? await store.getUserById(session.userId) : undefined;
     if (!sessionId || !session || !user || user.disabled ||
         (session.impersonatedBy && user.role === 'superadmin')) {
-      if (sessionId && session) sessions.revoke(sessionId);
+      if (sessionId && session) await sessions.revoke(sessionId);
       response.json({ user: null, expiresAt: null });
       return;
     }
@@ -257,7 +662,7 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
       if (!actor || actor.disabled || actor.role !== 'superadmin' ||
           !(await access.can(actor, 'users', 'view')) ||
           !(await access.can(actor, 'users', 'edit'))) {
-        sessions.revoke(sessionId);
+        await sessions.revoke(sessionId);
         response.json({ user: null, expiresAt: null });
         return;
       }
@@ -282,7 +687,7 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
         response.status(400).json({ message: 'A valid one-time launch token is required.' });
         return;
       }
-      const launch = sessions.consumeImpersonationLaunch(body.token);
+      const launch = await sessions.consumeImpersonationLaunch(body.token);
       if (!launch) {
         response.status(401).json({ message: 'This user-panel link is invalid or has expired.' });
         return;
@@ -299,14 +704,26 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
         response.status(403).json({ message: 'This account cannot be opened as a user panel.' });
         return;
       }
+      let session;
+      try {
+        session = await sessions.createImpersonationSession(
+          target.id,
+          { id: actor.id, name: actor.name, email: actor.email },
+          launch.actorSessionHash,
+        );
+      } catch (error) {
+        if (!(error instanceof InvalidSessionError)) throw error;
+        response.status(401).json({ message: 'The Superadmin session is no longer valid.' });
+        return;
+      }
       await store.recordAudit(actor, 'auth.impersonation_started', 'user', target.id, {
         impersonatedUserEmail: target.email,
+        reason: launch.reason,
+        actorSessionId: launch.actorSessionHash,
+        sessionId: sessions.auditReference(session.id),
+        sourceIp: request.ip ?? null,
+        userAgent: request.get('user-agent') ?? null,
         expiresInMinutes: 30,
-      });
-      const session = sessions.createImpersonationSession(target.id, {
-        id: actor.id,
-        name: actor.name,
-        email: actor.email,
       });
       response.json({
         sessionToken: session.id,
@@ -385,7 +802,7 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
       }
       throw error;
     }
-    sessions.revokeOtherSessions(request.authUser!.id, currentSessionId);
+    await sessions.revokeOtherSessions(request.authUser!.id, currentSessionId);
     response.status(204).end();
   });
 
@@ -447,7 +864,19 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
   router.post('/auth/logout', authenticate, async (request, response): Promise<void> => {
     const user = request.authUser!;
     const sessionId = request.authSessionId;
-    if (sessionId) sessions.revoke(sessionId);
+    if (sessionId) await sessions.revoke(sessionId);
+    const actorId = request.authSession?.impersonatedBy?.id;
+    if (actorId) {
+      const actor = await store.getUserById(actorId);
+      if (actor) {
+        await store.recordAudit(actor, 'auth.impersonation_ended', 'user', user.id, {
+          targetUserEmail: user.email,
+          sessionId: sessionId ? sessions.auditReference(sessionId) : null,
+          sourceIp: request.ip ?? null,
+          userAgent: request.get('user-agent') ?? null,
+        });
+      }
+    }
     await authentication.recordLogout(user);
     response.status(204).end();
   });
@@ -515,9 +944,30 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
         response.status(403).json({ message: 'This account cannot be opened as a user panel.' });
         return;
       }
-      const launch = sessions.createImpersonationLaunch(actor.id, target.id);
+      const actorSessionId = request.authSessionId;
+      if (!actorSessionId) {
+        response.status(401).json({ message: 'Authentication required.' });
+        return;
+      }
+      let launch;
+      try {
+        launch = await sessions.createImpersonationLaunch(
+          actor.id,
+          target.id,
+          actorSessionId,
+          IMPERSONATION_AUDIT_REASON,
+        );
+      } catch (error) {
+        if (!(error instanceof InvalidSessionError)) throw error;
+        response.status(401).json({ message: 'The Superadmin session is no longer valid.' });
+        return;
+      }
       await store.recordAudit(actor, 'auth.impersonation_link_created', 'user', target.id, {
         expiresInSeconds: 60,
+        reason: IMPERSONATION_AUDIT_REASON,
+        actorSessionId: sessions.auditReference(actorSessionId),
+        sourceIp: request.ip ?? null,
+        userAgent: request.get('user-agent') ?? null,
       });
       response.json({ launchToken: launch.token, expiresAt: launch.expiresAt });
     },
@@ -537,6 +987,30 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
         response.status(404).json({ message: 'The registered account was not found.' });
         return;
       }
+      response.json({ details });
+    },
+  );
+
+  router.post(
+    '/admin/registrations/:id/tracking-access',
+    authenticate,
+    requirePermission(access, 'directory', 'view'),
+    async (request, response): Promise<void> => {
+      if (!platformDirectory) {
+        response.status(503).json({ message: 'The platform registration directory is unavailable.' });
+        return;
+      }
+      const details = await platformDirectory.getRegistrationDetails(request.params['id']);
+      if (!details || details.registration.app !== 'energy-hub') {
+        response.status(404).json({ message: 'The partner account was not found.' });
+        return;
+      }
+      await store.recordAudit(request.authUser!, 'livemonitor.tracking_profile_opened', 'registration',
+        details.registration.id, {
+          registrationId: details.registration.registrationId,
+          currentJobReference: details.account.currentWork?.reference ?? null,
+          liveLocationAvailable: Boolean(details.account.currentWork?.liveLocation),
+        });
       response.json({ details });
     },
   );
@@ -655,7 +1129,7 @@ export function createApiRouter(dependencies: ApiDependencies): Router {
       }
       try {
         await access.deleteUser(id, request.authUser!);
-        sessions.revokeUserAccess(id);
+        await sessions.revokeUserAccess(id);
         response.status(204).end();
       } catch (error) {
         sendServiceError(response, error);

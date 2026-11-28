@@ -1,40 +1,406 @@
-<section class="page-head">
+<section class="page-head projects-head">
   <div>
     <h1>Projects</h1>
-    <p>Project requests from the live database. Production updates are not connected.</p>
+    <p>Project lifecycle, milestone delivery, recorded budget and sign-off health.</p>
   </div>
+  <span class="projects-live-badge"><span aria-hidden="true"></span> Database-backed</span>
 </section>
 
-<div class="panel">
-  <div class="panel-head">
-    <div class="panel-title">Project Requests — Panel Fabrication</div>
-  </div>
-  <div class="tbl-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Company</th>
-          <th>Project</th>
-          <th>Panels</th>
-          <th>Value</th>
-          <th>ETA</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (p of ops.projects(); track p.id) {
-        <tr>
-          <td><strong>{{ p.id }}</strong></td>
-          <td>{{ p.company }}</td>
-          <td>{{ p.title }}</td>
-          <td>{{ p.panels }}</td>
-          <td>{{ p.value === null ? 'Not recorded' : '₹' + p.value.toLocaleString('en-IN') }}</td>
-          <td>{{ p.eta }}</td>
-          <td><span class="status-pill" [class]="statusClass(p.status)">{{ p.status }}</span></td>
-        </tr>
+@if (ops.loadErrors()['projects']; as loadError) {
+  <div class="projects-message projects-message-error" role="alert">{{ loadError }}</div>
+}
+@if (notice() && !selectedProject()) {
+  <div class="projects-message projects-message-success" role="status">{{ notice() }}</div>
+}
+
+<section class="projects-kpis" aria-label="Project portfolio key performance indicators">
+  @for (metric of executiveKpis(); track metric.key) {
+    <article class="projects-kpi" [attr.data-tone]="metric.tone">
+      <span class="projects-kpi-icon" aria-hidden="true">
+        <span class="menu-icon" [attr.data-icon]="metric.icon"></span>
+      </span>
+      <div>
+        <span class="projects-kpi-label">{{ metric.label }}</span>
+        <strong>{{ metric.value }}</strong>
+        <small>{{ metric.detail }}</small>
+      </div>
+    </article>
+  }
+</section>
+
+<section class="projects-charts" aria-label="Project portfolio charts">
+  <article class="panel projects-chart-card">
+    <header>
+      <span class="panel-eyebrow">PORTFOLIO FUNNEL</span>
+      <h2>Project lifecycle</h2>
+      <p>Requests at each active and completed project stage. Select a bar to filter.</p>
+    </header>
+    <app-admin-chart type="bar" [compact]="true" [horizontal]="true"
+      [labels]="lifecycleCounts().map(item => item.label)"
+      [datasets]="lifecycleDatasets()" label="Project requests by lifecycle stage"
+      (chartSelect)="onChartSelect('status', $event)" />
+  </article>
+
+  <article class="panel projects-chart-card">
+    <header>
+      <span class="panel-eyebrow">BUDGET CONTROL</span>
+      <h2>Approved budget vs. recorded costs</h2>
+      <p>Only projects with stored milestone costs are shown; no estimated costs are inferred.</p>
+    </header>
+    @if (budgetProjects().length) {
+      <app-admin-chart type="bar" [compact]="true" [horizontal]="true"
+        [labels]="budgetProjects().map(project => project.title)"
+        [datasets]="budgetDatasets()" label="Project approved budget compared with recorded costs"
+        (chartSelect)="onChartSelect('project', $event)" />
+    } @else {
+      <div class="projects-chart-empty">Actual cost data is not recorded on project milestones yet.</div>
+    }
+  </article>
+
+  <article class="panel projects-chart-card">
+    <header>
+      <span class="panel-eyebrow">DELIVERY TIMELINE</span>
+      <h2>Milestone burn-up</h2>
+      <p>Cumulative planned due dates compared with milestones marked complete over six months.</p>
+    </header>
+    @if (burnup().hasData) {
+      <app-admin-chart type="line" [compact]="true"
+        [labels]="burnup().labels" [datasets]="burnupDatasets()"
+        label="Cumulative planned and completed project milestones" />
+    } @else {
+      <div class="projects-chart-empty">Add milestones with due dates to populate delivery progress.</div>
+    }
+  </article>
+
+  <article class="panel projects-chart-card projects-health-card">
+    <header>
+      <span class="panel-eyebrow">HEALTH &amp; CAPACITY</span>
+      <h2>Project health and lead workload</h2>
+      <p>Health uses milestone schedules and holds. Workload counts assigned milestones, not crew headcount.</p>
+    </header>
+    <div class="projects-health-grid">
+      <div>
+        <h3>Active project health</h3>
+        <app-admin-chart type="doughnut" [compact]="true"
+          [labels]="healthCounts().map(item => item.label)"
+          [datasets]="healthDatasets()" label="Active projects by health"
+          (chartSelect)="onChartSelect('health', $event)" />
+      </div>
+      <div>
+        <h3>Lead engineer milestone load</h3>
+        @if (leadCounts().length) {
+          <app-admin-chart type="bar" [compact]="true" [horizontal]="true"
+            [labels]="leadCounts().map(item => item.label)"
+            [datasets]="leadDatasets()" label="Active milestones by lead engineer"
+            (chartSelect)="onChartSelect('lead', $event)" />
+        } @else {
+          <div class="projects-chart-empty">Milestone lead assignments are not recorded.</div>
         }
-      </tbody>
-    </table>
+      </div>
+    </div>
+  </article>
+</section>
+
+<section class="projects-queue panel" aria-labelledby="projects-queue-title">
+  <div class="projects-queue-heading">
+    <div>
+      <span class="panel-eyebrow">PROJECT QUEUE · {{ filteredProjects().length }} REQUESTS</span>
+      <h2 id="projects-queue-title">Portfolio</h2>
+      <p>Filter by delivery risk or chart selection. Open a request to manage its lifecycle and milestones.</p>
+    </div>
+    <div class="projects-queue-actions">
+      <label class="projects-search">
+        <span class="sr-only">Search projects</span>
+        <input type="search" placeholder="Search project, client, or site"
+          [value]="searchText()" (input)="searchText.set($any($event.target).value)">
+      </label>
+      <div class="projects-view-toggle" role="group" aria-label="Portfolio layout">
+        <button type="button" [class.active]="queueView() === 'table'" [attr.aria-pressed]="queueView() === 'table'"
+          (click)="queueView.set('table')">Table</button>
+        <button type="button" [class.active]="queueView() === 'board'" [attr.aria-pressed]="queueView() === 'board'"
+          (click)="queueView.set('board')">Kanban</button>
+        <button type="button" [class.active]="queueView() === 'gantt'" [attr.aria-pressed]="queueView() === 'gantt'"
+          (click)="queueView.set('gantt')">Timeline</button>
+      </div>
+    </div>
   </div>
-</div>
+
+  <nav class="projects-filter-pills" aria-label="Filter project requests">
+    @for (filter of queueFilters(); track filter.id) {
+      <button type="button" [class.active]="queueFilter() === filter.id && !chartFilter()"
+        [attr.aria-pressed]="queueFilter() === filter.id && !chartFilter()"
+        (click)="setQueueFilter(filter.id)">
+        {{ filter.label }} <span>{{ filter.count }}</span>
+      </button>
+    }
+    @if (chartFilter(); as activeFilter) {
+      <button type="button" class="projects-chart-filter" (click)="chartFilter.set(null)">
+        Chart: {{ chartFilterLabel() }} <span aria-hidden="true">×</span>
+      </button>
+    }
+  </nav>
+
+  @if (queueView() === 'table') {
+    <div class="tbl-wrap projects-table-scroll" role="region" aria-label="Project portfolio table" tabindex="0">
+      <table>
+        <thead>
+          <tr>
+            <th>Request</th>
+            <th>Client / site</th>
+            <th>Project</th>
+            <th>Budget</th>
+            <th>Milestones</th>
+            <th>Delivery</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (project of filteredProjects(); track project.requestId) {
+            <tr [class.projects-row-risk]="isAtRisk(project)">
+              <td><button type="button" class="projects-open-link" (click)="openDetails(project)">{{ project.id }}</button></td>
+              <td><strong>{{ project.company }}</strong><small>{{ project.site }}</small></td>
+              <td><strong>{{ project.title }}</strong><small>{{ project.category }} · {{ project.projectType }}</small></td>
+              <td>{{ currencyLabel(project.value, project.currency) }}</td>
+              <td>
+                <span>{{ project.milestones.length }} milestones</span>
+                @if (project.milestones.length) {
+                  <div class="projects-progress"><span [style.width.%]="projectProgress(project)"></span></div>
+                  <small>{{ projectProgress(project) }}% complete</small>
+                } @else {
+                  <small>Plan not recorded</small>
+                }
+              </td>
+              <td>{{ project.eta }}</td>
+              <td><span class="status-pill" [class]="statusClass(project.status)">{{ statusLabel(project.status) }}</span></td>
+              <td><button type="button" class="projects-action-button" (click)="openDetails(project)">Open project</button></td>
+            </tr>
+          } @empty {
+            <tr><td colspan="8" class="projects-empty">No project requests match this filter.</td></tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @else if (queueView() === 'board') {
+    <div class="projects-board">
+      @for (stage of boardStages(); track stage.status) {
+        <section class="projects-board-column">
+          <header><h3>{{ stage.label }}</h3><span>{{ filteredProjects().filter(project => project.status === stage.status).length }}</span></header>
+          @for (project of filteredProjects().filter(item => item.status === stage.status); track project.requestId) {
+            <button type="button" class="projects-board-card" (click)="openDetails(project)">
+              <strong>{{ project.id }}</strong>
+              <span>{{ project.title }}</span>
+              <small>{{ project.company }} · {{ project.site }}</small>
+              <span class="projects-board-progress">{{ projectProgress(project) }}% milestone completion</span>
+            </button>
+          } @empty {
+            <p class="projects-empty-column">No projects</p>
+          }
+        </section>
+      }
+    </div>
+  } @else {
+    <div class="projects-timeline" role="list" aria-label="Project delivery timeline">
+      @if (ganttWindow(); as window) {
+        <div class="projects-timeline-axis">
+          <span>Milestone schedule</span>
+          <span>{{ dateLabel(window.start) }}</span>
+          <span>{{ dateLabel(window.end) }}</span>
+        </div>
+      }
+      @for (project of filteredProjects(); track project.requestId) {
+        <button type="button" class="projects-timeline-row" role="listitem" (click)="openDetails(project)">
+          <span class="projects-timeline-name"><strong>{{ project.title }}</strong><small>{{ project.company }} · {{ project.id }}</small></span>
+          <span class="projects-timeline-track">
+            @if (ganttPosition(project).width) {
+              <span class="projects-timeline-bar" [class.risk]="isAtRisk(project)"
+                [style.left.%]="ganttPosition(project).left" [style.width.%]="ganttPosition(project).width">
+                {{ project.milestones.length }} milestones
+              </span>
+            } @else {
+              <span class="projects-timeline-unplanned">No milestone dates recorded</span>
+            }
+          </span>
+          <span class="projects-timeline-dates">{{ project.eta }}</span>
+        </button>
+      } @empty {
+        <p class="projects-empty">No project requests match this filter.</p>
+      }
+    </div>
+  }
+</section>
+
+@if (selectedProject(); as project) {
+  <div class="projects-drawer-backdrop" (click)="closeDetails()">
+    <section class="projects-drawer" role="dialog" aria-modal="true"
+      [attr.aria-label]="'Project ' + project.id" (click)="$event.stopPropagation()">
+      <header class="projects-drawer-header">
+        <div>
+          <span class="panel-eyebrow">{{ project.id }} · {{ project.company }}</span>
+          <h2>{{ project.title }}</h2>
+          <p>{{ project.site }} · {{ project.category }} · {{ project.projectType }}</p>
+        </div>
+        <button type="button" class="projects-close-button" aria-label="Close project details" (click)="closeDetails()">×</button>
+      </header>
+
+      @if (error()) { <div class="projects-message projects-message-error" role="alert">{{ error() }}</div> }
+      @if (notice()) { <div class="projects-message projects-message-success" role="status">{{ notice() }}</div> }
+
+      <div class="projects-drawer-scroll">
+        <section class="projects-detail-section">
+          <div class="projects-detail-grid">
+            <div><span>Project status</span><strong><span class="status-pill" [class]="statusClass(project.status)">{{ statusLabel(project.status) }}</span></strong></div>
+            <div><span>Request budget</span><strong>{{ currencyLabel(project.value, project.currency) }}</strong></div>
+            <div><span>Preferred timeline</span><strong>{{ project.eta }}</strong></div>
+            <div><span>Submitted</span><strong>{{ dateLabel(project.submittedAt) }}</strong></div>
+          </div>
+          @if (project.description) { <p class="projects-description">{{ project.description }}</p> }
+          @if (project.requirements) { <p class="projects-description"><strong>Requirements:</strong> {{ project.requirements }}</p> }
+          @if (project.panels !== '—') { <p class="projects-description"><strong>Scope:</strong> {{ project.panels }}</p> }
+        </section>
+
+        <section class="projects-detail-section">
+          <div class="projects-section-heading">
+            <div><span class="panel-eyebrow">PROJECT LIFECYCLE</span><h3>Status management</h3></div>
+            @if (!auth.canAccess('projects', 'edit')) { <span class="projects-readonly-label">View only</span> }
+          </div>
+          @if (auth.canAccess('projects', 'edit') && nextStatuses(project).length) {
+            <div class="projects-status-actions">
+              @for (target of nextStatuses(project); track target) {
+                <button type="button" class="projects-action-button primary" [disabled]="saving()"
+                  (click)="changeStatus(project, target)">Move to {{ statusLabel(target) }}</button>
+              }
+            </div>
+          } @else if (project.status === 'draft') {
+            <p class="projects-muted">Draft requests must be submitted by the customer before review.</p>
+          } @else {
+            <p class="projects-muted">No Superadmin status transition is available from this stage.</p>
+          }
+          <div class="projects-history">
+            <h4>Status event history</h4>
+            @for (event of project.statusHistory; track event.changedAt) {
+              <article>
+                <span class="projects-history-dot" aria-hidden="true"></span>
+                <div>
+                  <strong>{{ event.oldStatus ? statusLabel(event.oldStatus) + ' → ' : '' }}{{ statusLabel(event.newStatus) }}</strong>
+                  <small>{{ dateLabel(event.changedAt) }}</small>
+                  @if (event.note) { <p>{{ event.note }}</p> }
+                </div>
+              </article>
+            } @empty {
+              <p class="projects-muted">No status changes have been recorded.</p>
+            }
+          </div>
+        </section>
+
+        <section class="projects-detail-section">
+          <div class="projects-section-heading">
+            <div>
+              <span class="panel-eyebrow">DELIVERY PLAN · {{ project.milestones.length }}</span>
+              <h3>Milestones, cost &amp; client sign-off</h3>
+            </div>
+          </div>
+          @if (project.milestones.length) {
+            <div class="projects-milestones">
+              @for (milestone of project.milestones; track milestone.id) {
+                <article class="projects-milestone-card">
+                  <div class="projects-milestone-top">
+                    <div><span class="projects-milestone-index">M{{ milestone.sequence }}</span><strong>{{ milestone.title }}</strong></div>
+                    <span class="status-pill" [class]="statusClass(milestone.status)">{{ statusLabel(milestone.status) }}</span>
+                  </div>
+                  <div class="projects-milestone-meta">
+                    <span>Due {{ dateLabel(milestone.dueDate) }}</span>
+                    @if (milestone.leadEngineerName) { <span>Lead: {{ milestone.leadEngineerName }}</span> }
+                    <span>Sign-off: {{ statusLabel(milestone.clientSignoffStatus) }}</span>
+                  </div>
+                  <div class="projects-milestone-financials">
+                    <span>Budget: {{ currencyLabel(milestone.budgetAmount, project.currency) }}</span>
+                    <span>Costs: {{ milestone.materialCost === null && milestone.partnerPayout === null ? 'Not recorded' : currencyLabel((milestone.materialCost ?? 0) + (milestone.partnerPayout ?? 0), project.currency) }}</span>
+                    <span>Billed: {{ currencyLabel(milestone.billedAmount, project.currency) }}</span>
+                  </div>
+                  @if (auth.canAccess('projects', 'edit')) {
+                    <div class="projects-milestone-actions">
+                      @if (milestone.status === 'pending') {
+                        <button type="button" class="projects-small-button" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { status: 'in_progress' })">Start</button>
+                      }
+                      @if (milestone.status === 'in_progress') {
+                        <button type="button" class="projects-small-button" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { status: 'completed' })">Mark complete</button>
+                      }
+                      @if (milestone.status === 'pending' || milestone.status === 'in_progress') {
+                        <button type="button" class="projects-small-button subdued" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { status: 'blocked' })">Mark blocked</button>
+                      }
+                      @if (milestone.status === 'blocked') {
+                        <button type="button" class="projects-small-button" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { status: 'in_progress' })">Resume</button>
+                      }
+                      <button type="button" class="projects-small-button subdued" [disabled]="saving()"
+                        (click)="beginFinancialEdit(milestone)">Edit billing &amp; costs</button>
+                      @if (milestone.clientSignoffStatus === 'pending') {
+                        <button type="button" class="projects-small-button" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { clientSignoffStatus: 'approved' })">Approve sign-off</button>
+                        <button type="button" class="projects-small-button subdued" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { clientSignoffStatus: 'rejected' })">Reject sign-off</button>
+                      }
+                      @if (milestone.clientSignoffStatus === 'rejected') {
+                        <button type="button" class="projects-small-button subdued" [disabled]="saving()"
+                          (click)="updateMilestone(project, milestone, { clientSignoffStatus: 'pending' })">Request sign-off again</button>
+                      }
+                    </div>
+                  }
+                  @if (financialMilestoneId() === milestone.id && auth.canAccess('projects', 'edit')) {
+                    <form class="projects-financial-form" (ngSubmit)="saveFinancials(project, milestone, $event)">
+                      <label>Material cost<input name="materialCost" type="number" min="0" step="0.01" [(ngModel)]="financialForm.materialCost"></label>
+                      <label>Partner payout<input name="partnerPayout" type="number" min="0" step="0.01" [(ngModel)]="financialForm.partnerPayout"></label>
+                      <label>Billed amount<input name="billedAmount" type="number" min="0" step="0.01" [(ngModel)]="financialForm.billedAmount"></label>
+                      <button type="submit" class="projects-small-button" [disabled]="saving()">Save amounts</button>
+                      <button type="button" class="projects-small-button subdued" (click)="financialMilestoneId.set(null)">Cancel</button>
+                    </form>
+                  }
+                </article>
+              }
+            </div>
+          } @else {
+            <p class="projects-muted">No milestone schedule has been recorded for this project.</p>
+          }
+          @if (auth.canAccess('projects', 'edit') && !['completed', 'cancelled'].includes(project.status)) {
+            <form class="projects-milestone-form" (ngSubmit)="createMilestone($event)">
+              <h4>Add milestone</h4>
+              <div class="projects-form-grid">
+                <label>Milestone name<input name="title" required minlength="2" maxlength="160" [(ngModel)]="milestoneForm.title"></label>
+                <label>Lead engineer<input name="leadEngineerName" maxlength="120" [(ngModel)]="milestoneForm.leadEngineerName"></label>
+                <label>Planned start<input name="plannedStart" type="date" [(ngModel)]="milestoneForm.plannedStart"></label>
+                <label>Due date<input name="dueDate" type="date" required [(ngModel)]="milestoneForm.dueDate"></label>
+                <label>Milestone budget<input name="budgetAmount" type="number" min="0" step="0.01" [(ngModel)]="milestoneForm.budgetAmount"></label>
+                <label>Material cost<input name="materialCost" type="number" min="0" step="0.01" [(ngModel)]="milestoneForm.materialCost"></label>
+                <label>Partner payout<input name="partnerPayout" type="number" min="0" step="0.01" [(ngModel)]="milestoneForm.partnerPayout"></label>
+                <label>Billed amount<input name="billedAmount" type="number" min="0" step="0.01" [(ngModel)]="milestoneForm.billedAmount"></label>
+                <label>Client sign-off
+                  <select name="clientSignoffStatus" [(ngModel)]="milestoneForm.clientSignoffStatus">
+                    <option value="pending">Pending</option>
+                    <option value="not_required">Not required</option>
+                  </select>
+                </label>
+              </div>
+              <button type="submit" class="projects-action-button primary" [disabled]="saving() || !milestoneForm.title.trim() || !milestoneForm.dueDate">
+                {{ saving() ? 'Saving…' : 'Add milestone' }}
+              </button>
+            </form>
+          }
+        </section>
+
+        <section class="projects-integrations">
+          <span class="panel-eyebrow">CONNECTED MODULES</span>
+          <div class="projects-integration-grid">
+            <div><strong>Inventory / BOM</strong><span>Project-linked BOM data is not connected.</span></div>
+            <div><strong>Jobs / crew</strong><span>Project child-job and crew records are not connected.</span></div>
+            <div><strong>Invoices</strong><span>Invoice trigger is unavailable; billing values above are milestone records only.</span></div>
+            <div><strong>AMC handover</strong><span>AMC conversion is not connected; no contract is created automatically.</span></div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </div>
+}

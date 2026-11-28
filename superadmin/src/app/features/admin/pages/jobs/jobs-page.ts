@@ -1,39 +1,38 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { interval } from 'rxjs';
+import { AdminApiService } from '../../../../core/services/admin-api.service';
+import { AuthService } from '../../../../core/services/auth.service';
 import {
   OperationsService,
+  jobSkillMatchCount,
   type Job,
   type JobActivity,
-  type JobStage,
+  type Partner,
 } from '../../../../core/services/operations.service';
+import { AdminChart } from '../../../../shared/admin-chart/admin-chart';
 
 type JobFilter = 'all' | 'unassigned' | 'sla-risk' | 'progress' | 'completed';
 type JobSort = 'urgency' | 'sla' | 'amount' | 'newest';
 
 @Component({
   selector: 'app-jobs-page',
-  imports: [],
+  imports: [AdminChart],
   templateUrl: './jobs-page.html',
   styleUrl: './jobs-page.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class JobsPage {
   readonly ops = inject(OperationsService);
+  readonly auth = inject(AuthService);
+  private readonly api = inject(AdminApiService);
   readonly activeFilter = signal<JobFilter>('all');
   readonly searchTerm = signal('');
   readonly sortBy = signal<JobSort>('urgency');
   readonly selectedJobId = signal<string | null>(null);
-  readonly scheduleNotice = signal<string | null>(null);
-  readonly workNoteDraft = signal('');
-  readonly workNoteError = signal<string | null>(null);
-  readonly workNoteNotice = signal<string | null>(null);
-  readonly deliveryStages: JobStage[] = [
-    'triage',
-    'assigned',
-    'scheduled',
-    'on-site',
-    'in-service',
-    'quality-check',
-  ];
+  readonly clockNow = signal(Date.now());
+  readonly assignmentNotice = signal<string | null>(null);
+  readonly assignmentError = signal<string | null>(null);
 
   readonly filters: { value: JobFilter; label: string }[] = [
     { value: 'all', label: 'All jobs' },
@@ -44,22 +43,43 @@ export class JobsPage {
   ];
 
   readonly metrics = computed(() => {
-    const jobs = this.ops.jobs();
-    const active = jobs.filter((job) => job.status !== 'completed');
+    const active = this.ops.liveJobs();
+    const allJobs = this.ops.jobs();
+    const share = (part: number, total: number) => total ? Math.round((part / total) * 100) : 0;
+    const needsAttention = active.filter((job) => this.isSlaRisk(job)).length;
+    const unassigned = this.ops.unassignedJobs().length;
+    const priced = active.filter((job) => job.amount > 0).length;
     return [
-      { label: 'Open jobs', value: String(active.length), detail: 'Awaiting or in delivery', tone: 'blue' },
-      { label: 'Needs attention', value: String(active.filter((job) => this.isSlaRisk(job)).length), detail: 'At or near SLA breach', tone: 'red' },
-      { label: 'Unassigned', value: String(active.filter((job) => !job.partner).length), detail: 'No service partner yet', tone: 'amber' },
-      { label: 'Open value', value: this.formatCurrency(active.reduce((sum, job) => sum + job.amount, 0)), detail: 'Estimated work in queue', tone: 'green' },
+      { label: 'Open jobs', value: String(active.length), detail: 'Awaiting or in delivery', tone: 'blue', icon: 'list', progress: share(active.length, allJobs.length), visualLabel: 'Open jobs as a share of all recorded jobs' },
+      { label: 'Needs attention', value: String(needsAttention), detail: 'At or near SLA breach', tone: 'red', icon: 'warn', progress: share(needsAttention, active.length), visualLabel: 'Jobs at or near SLA breach as a share of the open queue' },
+      { label: 'Unassigned', value: String(unassigned), detail: 'No service partner yet', tone: 'amber', icon: 'users', progress: share(unassigned, active.length), visualLabel: 'Unassigned jobs as a share of the open queue' },
+      { label: 'Open value', value: this.formatCurrency(active.reduce((sum, job) => sum + job.amount, 0)), detail: 'Estimated work in queue', tone: 'green', icon: 'rupee', progress: share(priced, active.length), visualLabel: 'Open jobs with a stored estimate' },
     ];
   });
+
+  readonly queueChartDatasets = computed(() => {
+    const jobs = this.ops.jobs();
+    const statuses: Job['status'][] = ['unassigned', 'progress', 'sla-risk', 'completed'];
+    return [{
+      label: 'Jobs',
+      data: statuses.map((status) => jobs.filter((job) => job.status === status).length),
+      backgroundColor: ['#ffbd4a', '#42e8d5', '#ff5b7e', '#8b7bff'],
+      borderRadius: 7,
+      borderSkipped: false,
+    }];
+  });
+
+  constructor() {
+    interval(60_000).pipe(takeUntilDestroyed()).subscribe(() => this.clockNow.set(Date.now()));
+  }
 
   readonly filteredJobs = computed(() => {
     const search = this.searchTerm().trim().toLocaleLowerCase();
     const filter = this.activeFilter();
+    const unassignedJobIds = new Set(this.ops.unassignedJobs().map((job) => job.id));
     const jobs = this.ops.jobs().filter((job) => {
       const matchesFilter = filter === 'all'
-        || (filter === 'unassigned' && job.status !== 'completed' && !job.partner)
+        || (filter === 'unassigned' && unassignedJobIds.has(job.id))
         || (filter === 'sla-risk' && this.isSlaRisk(job))
         || job.status === filter;
       const searchable = [
@@ -103,102 +123,90 @@ export class JobsPage {
   count(filter: JobFilter): number {
     const jobs = this.ops.jobs();
     if (filter === 'all') return jobs.length;
-    if (filter === 'unassigned') return jobs.filter((job) => job.status !== 'completed' && !job.partner).length;
+    if (filter === 'unassigned') return this.ops.unassignedJobs().length;
     if (filter === 'sla-risk') return jobs.filter((job) => this.isSlaRisk(job)).length;
     return jobs.filter((job) => job.status === filter).length;
   }
 
-  partnerOptions() {
-    return this.ops.partners().filter((partner) => partner.type !== 'supplier');
+  partnerOptions(job: Job): Partner[] {
+    const role = this.partnerTypeForJob(job);
+    return this.ops.partners().filter((partner) =>
+      partner.online && !partner.busy && partner.verified && (!role || partner.type === role),
+    ).sort((left, right) =>
+      jobSkillMatchCount(job, right) - jobSkillMatchCount(job, left) ||
+      right.rating - left.rating ||
+      right.jobsDone - left.jobsDone,
+    );
   }
 
-  assign(jobId: string, event: Event): void {
-    this.ops.assignJob(jobId, (event.target as HTMLSelectElement).value || null);
+  partnerSkillMatchCount(job: Job, partner: Partner): number {
+    return jobSkillMatchCount(job, partner);
   }
 
-  complete(jobId: string): void {
-    this.ops.completeJob(jobId);
+  async assign(jobId: string, event: Event): Promise<void> {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement)) return;
+    this.assignmentNotice.set(null);
+    this.assignmentError.set(null);
+    if (!this.auth.canAccess('jobs', 'edit')) {
+      this.assignmentError.set('You do not have permission to change job assignments.');
+      return;
+    }
+    try {
+      const result = await this.ops.assignJob(jobId, target.value || null);
+      this.assignmentNotice.set(result.refreshed
+        ? 'Assignment saved to the database.'
+        : 'Assignment saved, but the live job list could not be refreshed.');
+    } catch (error) {
+      this.assignmentError.set(this.api.errorMessage(error, 'The job assignment could not be saved.'));
+    }
   }
 
   openDetails(jobId: string): void {
-    this.scheduleNotice.set(null);
-    this.workNoteDraft.set('');
-    this.workNoteError.set(null);
-    this.workNoteNotice.set(null);
     this.selectedJobId.set(jobId);
+  }
+
+  openCardDetails(event: MouseEvent, jobId: string): void {
+    const target = event.target;
+    if (target instanceof Element && target.closest('button, input, select, textarea, a')) return;
+    this.openDetails(jobId);
   }
 
   closeDetails(): void {
     this.selectedJobId.set(null);
   }
 
-  scheduleJob(jobId: string, value: string): void {
-    if (!value) {
-      this.scheduleNotice.set('Choose a visit date and time.');
-      return;
-    }
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime()) || !this.ops.scheduleJob(jobId, date.toISOString())) {
-      this.scheduleNotice.set('The visit time could not be saved. Check the date and try again.');
-      return;
-    }
-    this.scheduleNotice.set('Visit schedule saved for this session.');
-  }
-
-  scheduleInputValue(value: string | undefined): string {
-    if (!value) return '';
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return '';
-    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-      .toISOString()
-      .slice(0, 16);
-  }
-
-  advanceStage(jobId: string): void {
-    this.ops.advanceJobStage(jobId);
-  }
-
-  stageIndex(job: Job): number {
-    const stage = this.ops.jobStage(job);
-    return stage === 'completed' ? this.deliveryStages.length : this.deliveryStages.indexOf(stage);
-  }
-
-  completedChecklistCount(job: Job): number {
-    return this.ops.jobChecklist(job).filter((item) => item.done).length;
-  }
-
-  stageRequirement(job: Job): string | null {
-    if (job.status === 'completed') return null;
-    const next = this.ops.nextJobStage(job);
-    if (!next) return 'Final quality check is ready. Mark the job complete after handover.';
-    if (!job.partner) return 'Assign a service partner before progressing delivery.';
-    if (next === 'scheduled' && !job.scheduledAt) return 'Save a visit schedule before progressing delivery.';
-    return null;
-  }
-
-  setWorkNoteDraft(event: Event): void {
-    this.workNoteDraft.set((event.target as HTMLTextAreaElement).value);
-    this.workNoteError.set(null);
-    this.workNoteNotice.set(null);
-  }
-
-  addWorkNote(jobId: string): void {
-    const note = this.workNoteDraft().trim();
-    if (!note) {
-      this.workNoteError.set('Enter a work note before saving.');
-      return;
-    }
-    if (!this.ops.addJobWorkNote(jobId, note)) {
-      this.workNoteError.set('The work note could not be saved. Keep it under 500 characters.');
-      return;
-    }
-    this.workNoteDraft.set('');
-    this.workNoteError.set(null);
-    this.workNoteNotice.set('Work note saved for this session.');
-  }
-
   activity(job: Job): JobActivity[] {
     return [...(job.activity ?? [])].reverse();
+  }
+
+  stageLabel(job: Job): string {
+    const stage = job.rawStage || job.stage;
+    if (!stage) return job.status === 'completed' ? 'Completed' : 'Stage not recorded';
+    return stage.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  stageAge(job: Job): string {
+    const latestStage = job.stageHistory?.at(-1);
+    if (!latestStage?.at) return 'Stage history unavailable';
+    const elapsed = this.clockNow() - Date.parse(latestStage.at);
+    if (!Number.isFinite(elapsed) || elapsed < 0) return 'Stage timestamp unavailable';
+    const minutes = Math.floor(elapsed / 60_000);
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+  }
+
+  recordedContribution(job: Job): number | null {
+    if (job.totalBill === null || job.totalBill === undefined || job.totalBill <= 0 ||
+        job.payoutAmount === null || job.payoutAmount === undefined ||
+        job.partsTotal === null || job.partsTotal === undefined) return null;
+    return job.totalBill - job.payoutAmount - job.partsTotal;
+  }
+
+  recordedContributionLabel(job: Job): string {
+    const contribution = this.recordedContribution(job);
+    return contribution === null ? 'Insufficient data' : this.formatCurrency(contribution);
   }
 
   statusLabel(job: Job): string {
@@ -226,19 +234,30 @@ export class JobsPage {
     }).format(amount);
   }
 
-  formatDate(value: string | undefined): string {
+  formatDate(value: string | null | undefined): string {
     if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
     return new Intl.DateTimeFormat('en-IN', {
       day: '2-digit',
       month: 'short',
       hour: 'numeric',
       minute: '2-digit',
-    }).format(new Date(value));
+    }).format(date);
   }
 
   isSlaRisk(job: Job): boolean {
     return job.status !== 'completed'
       && (job.status === 'sla-risk' || (job.slaMinsLeft !== null && job.slaMinsLeft <= 10));
+  }
+
+  private partnerTypeForJob(job: Job): Partner['type'] | null {
+    const role = job.targetRole?.toLocaleLowerCase() ?? '';
+    if (role.includes('supplier') || role.includes('delivery')) return 'supplier';
+    if (role.includes('repair')) return 'repairing';
+    if (role.includes('panel')) return 'panelmaker';
+    if (role.includes('service')) return 'service';
+    return null;
   }
 
   private urgencyRank(job: Job): number {

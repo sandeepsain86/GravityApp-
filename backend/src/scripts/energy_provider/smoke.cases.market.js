@@ -60,6 +60,7 @@ module.exports = async function marketplaceCases({ partnerA, partnerB }) {
   check('delivery job is accepted', deliveryAccepted.status === 'accepted');
   check('accepted delivery does not expose the customer phone', deliveryAccepted.customerPhone === null);
   check('delivery starts at the pickup stage', deliveryAccepted.stage === 'pickup');
+  check('delivery assignment time is persisted', Boolean((await JobModel.findById(deliveryJob.id)).assigned_at));
 
   await expectError(
     'delivery completion needs the pickup photo',

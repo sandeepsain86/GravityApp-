@@ -1,19 +1,32 @@
 <section class="page-head analytics-head">
   <div>
     <h1>Analytics &amp; Reports</h1>
-    <p>Revenue and activity by date, time, and business category.</p>
+    <p>Financial and operational performance, grouped in India Standard Time.</p>
   </div>
-  <span class="sample-badge">
-    <span></span>
-    @if (operations.sourceStatus('analytics') === 'loading') {
-      Loading connected records…
-    } @else if (operations.sourceStatus('analytics') === 'connected') {
-      Database-backed events
-    } @else {
-      Analytics source unavailable
-    }
-  </span>
+  <div class="analytics-actions">
+    <span class="sample-badge">
+      <span></span>
+      @if (operations.sourceStatus('analytics') === 'loading') {
+        Loading connected records…
+      } @else if (operations.sourceStatus('analytics') === 'connected') {
+        Live database sources
+      } @else if (operations.sourceStatus('analytics') === 'error') {
+        Analytics source error
+      } @else {
+        Analytics source unavailable
+      }
+    </span>
+    <button class="btn btn-ghost" type="button" (click)="exportCsv()">Export CSV</button>
+    <button class="btn btn-primary" type="button" (click)="exportPdf()">Print / Save PDF</button>
+  </div>
 </section>
+
+@if (operations.loadErrors()['analytics']; as loadError) {
+  <section class="panel analytics-error" role="alert">
+    <strong>Analytics could not be loaded</strong>
+    <p>{{ loadError }}</p>
+  </section>
+}
 
 <section class="panel analytics-filters" aria-label="Analytics filters">
   <div class="panel-head">
@@ -33,33 +46,47 @@
 
       <label class="filter-field">
         <span>Category</span>
-        <select (change)="selectCategory($event)">
+        <select aria-label="Category" (change)="selectCategory($event)">
           @for (category of categoryOptions; track category.id) {
-            <option [value]="category.id" [selected]="selectedCategory() === category.id">{{ categoryOptionLabel(category.id) }}</option>
+            <option [value]="category.id" [selected]="selectedCategory() === category.id">{{ category.label }}</option>
           }
         </select>
       </label>
 
       <label class="filter-field">
         <span>Group by</span>
-        <select (change)="selectGranularity($event)">
+        <select aria-label="Group by" (change)="selectGranularity($event)">
           @for (option of granularityOptions; track option.id) {
-            <option [value]="option.id" [selected]="resolvedGranularity() === option.id" [disabled]="granularityDisabled(option.id)">{{ option.label }}</option>
+            <option [value]="option.id" [selected]="selectedGranularity() === option.id" [disabled]="granularityDisabled(option.id)">{{ option.label }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="filter-field">
+        <span>Compare with</span>
+        <select aria-label="Compare with" (change)="selectComparison($event)">
+          @for (option of comparisonOptions; track option.id) {
+            <option [value]="option.id" [selected]="comparison() === option.id">{{ option.label }}</option>
           }
         </select>
       </label>
 
       @if (selectedPreset() === 'custom') {
         <label class="filter-field">
-          <span>From</span>
+          <span>From (IST)</span>
           <input type="date" [value]="startDate()" [max]="maxDate" (change)="updateStartDate($event)" />
         </label>
 
         <label class="filter-field">
-          <span>To</span>
+          <span>To (IST)</span>
           <input type="date" [value]="endDate()" [max]="maxDate" (change)="updateEndDate($event)" />
         </label>
       }
+
+      <label class="amc-filter">
+        <input type="checkbox" [checked]="activeAmcOnly()" (change)="toggleActiveAmc($event)" />
+        <span>Active-AMC customers only</span>
+      </label>
     </div>
 
     @if (rangeError()) {
@@ -81,113 +108,219 @@
   }
 </section>
 
-@if (report().points.length) {
-  <section class="analytics-charts" aria-label="Filtered analytics charts">
-    <article class="panel analytics-panel">
-      <div class="panel-head chart-heading">
-        <div>
-          <div class="panel-title">Revenue trend</div>
-          <p>{{ rangeLabel() }} · {{ granularityLabel() }} · {{ selectedCategory() === 'all' ? 'all categories' : report().topCategory?.label }}</p>
-        </div>
-        <strong class="chart-total">{{ formatCurrency(report().revenue) }}</strong>
-      </div>
-      <div class="panel-body">
-        <div class="chart-plot" role="img" aria-label="Revenue by selected time bucket"
-          [style.grid-template-columns]="'repeat(' + report().points.length + ', minmax(0, 1fr))'">
-          @for (point of report().points; track point.key; let i = $index) {
-            <div class="chart-column" [title]="pointTitle(point)">
-              <span class="chart-value" [class.chart-value-hidden]="report().points.length > 8">
-                {{ report().points.length <= 8 ? formatCompactCurrency(point.revenue) : '' }}
-              </span>
-              <div class="chart-rail">
-                <span class="chart-fill revenue-fill" [style.height.%]="revenueHeight(point.revenue)"></span>
-              </div>
-              @if (showAxisLabel(i)) {
-                <span class="chart-label">{{ point.label }}</span>
-              }
-            </div>
-          }
-        </div>
-      </div>
-    </article>
+<p class="data-limit-note">
+  Gross earnings use recorded partner earnings and paid order records; refunded payments are offset by their stored update time. Invoices, taxes, and AMC contract
+  amounts are not stored in the connected sources; pre-tax net is therefore indicative, not a tax-adjusted margin.
+</p>
 
-    <article class="panel analytics-panel">
-      <div class="panel-head chart-heading">
-        <div>
-          <div class="panel-title">Jobs &amp; orders trend</div>
-          <p>Service, repair, AMC, E-cart, and project activity</p>
-        </div>
-        <strong class="chart-total">{{ report().activity.toLocaleString('en-IN') }}</strong>
-      </div>
-      <div class="panel-body">
-        <div class="chart-plot activity-plot" role="img" aria-label="Jobs and orders by selected time bucket"
-          [style.grid-template-columns]="'repeat(' + report().points.length + ', minmax(0, 1fr))'">
-          @for (point of report().points; track point.key; let i = $index) {
-            <div class="chart-column" [title]="activityPointTitle(point)">
-              <span class="chart-value" [class.chart-value-hidden]="report().points.length > 8">
-                {{ report().points.length <= 8 ? point.activity : '' }}
-              </span>
-              <div class="chart-rail">
-                <span class="chart-fill activity-fill" [style.height.%]="activityHeight(point.activity)"></span>
-              </div>
-              @if (showAxisLabel(i)) {
-                <span class="chart-label">{{ point.label }}</span>
-              }
-            </div>
-          }
-        </div>
-      </div>
-    </article>
-  </section>
-
-  <section class="panel category-panel">
+<section class="analytics-charts" aria-label="Analytics trends">
+  <article class="panel analytics-panel">
     <div class="panel-head chart-heading">
       <div>
-        <div class="panel-title">Category performance</div>
-        <p>Revenue, activity volume, average value, share, and change vs previous period.</p>
+        <div class="panel-title">Earnings and payout trend</div>
+        <p>{{ rangeLabel() }} · {{ granularityLabel() }} · India Standard Time</p>
       </div>
-      <strong class="chart-total">{{ report().categories.length }} categories</strong>
+      <strong class="chart-total">{{ formatCurrency(current().grossRevenue) }}</strong>
     </div>
-    <div class="analytics-table-wrap">
-      <table class="analytics-table">
-        <thead>
+    <div class="panel-body">
+      <div class="chart-legend">
+        <span><i class="legend-revenue"></i>Gross earnings / paid orders</span>
+        <span><i class="legend-refund"></i>Refunds</span>
+        <span><i class="legend-payout"></i>Paid partner payouts</span>
+      </div>
+      @if (current().points.length) {
+        <app-admin-chart type="line" [labels]="current().points.map((point, i) => showAxisLabel(i) ? point.label : '')"
+          [datasets]="earningsChartDatasets()" label="Gross earnings, refunds and paid payouts by time bucket" />
+      } @else {
+        <p class="chart-empty">Choose a valid date range to view the trend.</p>
+      }
+    </div>
+  </article>
+
+  <article class="panel analytics-panel">
+    <div class="panel-head chart-heading">
+      <div>
+        <div class="panel-title">Job funnel and SLA breaches</div>
+        <p>Created, completed, and breached operational jobs by {{ granularityLabel().toLowerCase() }} bucket.</p>
+      </div>
+      <strong class="chart-total">{{ current().createdJobs.toLocaleString('en-IN') }} created</strong>
+    </div>
+    <div class="panel-body">
+      <div class="chart-legend">
+        <span><i class="legend-created"></i>Created</span>
+        <span><i class="legend-completed"></i>Completed</span>
+        <span><i class="legend-breach"></i>SLA breach</span>
+      </div>
+      @if (current().points.length) {
+        <app-admin-chart type="bar" [labels]="current().points.map((point, i) => showAxisLabel(i) ? point.label : '')"
+          [datasets]="jobsChartDatasets()" label="Created and completed jobs with SLA breaches by time bucket" />
+      } @else {
+        <p class="chart-empty">No operational job data is available for this range.</p>
+      }
+    </div>
+  </article>
+</section>
+
+<section class="panel category-panel">
+  <div class="panel-head chart-heading">
+    <div>
+      <div class="panel-title">Category financial and SLA matrix</div>
+      <p>Revenue share, activity volume, partner payouts, SLA results, and {{ comparisonLabel().toLowerCase() }} comparison.</p>
+    </div>
+    <strong class="chart-total">{{ categoryRows().length }} categories</strong>
+  </div>
+  <div class="analytics-table-wrap">
+    <table class="analytics-table">
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Gross</th>
+          <th>Refunds</th>
+          <th>Net after payouts</th>
+          <th>Activity</th>
+          <th>Transactions</th>
+          <th>Partner payout</th>
+          <th>Revenue share</th>
+          <th>SLA</th>
+          <th>Breaches</th>
+          <th>Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (category of categoryRows(); track category.id) {
           <tr>
-            <th>Category</th>
-            <th>Revenue</th>
-            <th>Jobs / orders</th>
-            <th>Average value</th>
-            <th>Revenue share</th>
-            <th>Change</th>
+            <td><button class="link-button" type="button" (click)="selectCategoryDrilldown(category.id)">{{ category.label }}</button></td>
+            <td>{{ formatCurrency(category.revenue) }}</td>
+            <td>{{ formatCurrency(category.refunds) }}</td>
+            <td>{{ formatCurrency(category.net) }}</td>
+            <td>{{ category.activity.toLocaleString('en-IN') }}</td>
+            <td>{{ category.transactions.toLocaleString('en-IN') }}</td>
+            <td>{{ formatCurrency(category.payout) }}</td>
+            <td>
+              <div class="share-cell">
+                <span class="share-track"><span [style.width.%]="category.share"></span></span>
+                <strong>{{ category.share.toFixed(1) }}%</strong>
+              </div>
+            </td>
+            <td>{{ category.slaCompliance === null ? '—' : formatPercent(category.slaCompliance) }}</td>
+            <td>{{ category.slaBreaches }}</td>
+            <td [class.change-up]="category.change === null || category.change >= 0"
+              [class.change-down]="category.change !== null && category.change < 0">
+              {{ changeLabel(category.change) }}
+            </td>
           </tr>
-        </thead>
+        }
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="analytics-insights">
+  <article class="panel insight-panel">
+    <div class="panel-head"><div class="panel-title">Partner leaderboard</div></div>
+    <div class="analytics-table-wrap">
+      <table class="analytics-table compact-table">
+        <thead><tr><th>Partner</th><th>Rating</th><th>Jobs</th><th>Completed</th><th>Gross</th><th>Payout</th><th>SLA</th></tr></thead>
         <tbody>
-          @for (category of report().categories; track category.id) {
+          @for (partner of partners(); track partner.id) {
             <tr>
-              <td><strong>{{ category.label }}</strong></td>
-              <td>{{ formatCurrency(category.revenue) }}</td>
-              <td>{{ category.activity.toLocaleString('en-IN') }}</td>
-              <td>{{ formatCurrency(category.average) }}</td>
-              <td>
-                <div class="share-cell">
-                  <span class="share-track">
-                    <span [style.width.%]="category.share"></span>
-                  </span>
-                  <strong>{{ category.share.toFixed(1) }}%</strong>
-                </div>
-              </td>
-              <td [class.change-up]="category.change === null || category.change >= 0"
-                [class.change-down]="category.change !== null && category.change < 0">
-                {{ changeLabel(category.change) }}
-              </td>
+              <td><button class="link-button" type="button" (click)="selectPartnerDrilldown(partner)">{{ partner.name }}</button></td>
+              <td>{{ partner.rating === null ? '—' : partner.rating.toFixed(1) }}</td>
+              <td>{{ partner.jobs }}</td>
+              <td>{{ partner.completed }}</td>
+              <td>{{ formatCurrency(partner.revenue) }}</td>
+              <td>{{ formatCurrency(partner.payout) }}</td>
+              <td>{{ partner.slaCompliance === null ? '—' : formatPercent(partner.slaCompliance) }}</td>
             </tr>
+          } @empty {
+            <tr><td colspan="7" class="empty-cell">No partner activity in this range.</td></tr>
           }
         </tbody>
       </table>
     </div>
-  </section>
-} @else {
-  <section class="panel analytics-empty" role="status">
-    <strong>No analytics for this range</strong>
-    <p>Choose a valid date range to see revenue and activity details.</p>
-  </section>
-}
+  </article>
+
+  <article class="panel insight-panel">
+    <div class="panel-head"><div class="panel-title">Top faults and OEMs</div></div>
+    <div class="insight-columns">
+      <div>
+        <h3>Faults</h3>
+        @for (fault of topFaults(); track fault.label) {
+          <div class="rank-row"><span>{{ fault.label }}</span><strong>{{ fault.count }}</strong></div>
+        } @empty {
+          <p class="empty-cell">No fault descriptions recorded.</p>
+        }
+      </div>
+      <div>
+        <h3>OEM / model</h3>
+        @for (oem of topOems(); track oem.label) {
+          <div class="rank-row"><span>{{ oem.label }}</span><strong>{{ oem.count }}</strong></div>
+        } @empty {
+          <p class="empty-cell">No OEM data recorded.</p>
+        }
+      </div>
+    </div>
+  </article>
+</section>
+
+<section class="panel category-panel">
+  <div class="panel-head chart-heading">
+    <div>
+      <div class="panel-title">Potential low-stock exposure</div>
+      <p>Inventory at or below reorder level; recent job usage is shown where parts match by name. Lost revenue is not inferred.</p>
+    </div>
+    <strong class="chart-total">{{ operations.analyticsInsights().lowStockItems.length }} items</strong>
+  </div>
+  <div class="analytics-table-wrap">
+    <table class="analytics-table compact-table">
+      <thead><tr><th>Part</th><th>SKU</th><th>Current stock</th><th>Reorder level</th><th>Jobs using part (90d)</th></tr></thead>
+      <tbody>
+        @for (item of operations.analyticsInsights().lowStockItems; track item.id) {
+          <tr><td><strong>{{ item.name }}</strong></td><td>{{ item.sku || '—' }}</td><td>{{ item.quantity }}</td><td>{{ item.reorderLevel }}</td><td>{{ item.recentJobsUsing }}</td></tr>
+        } @empty {
+          <tr><td colspan="5" class="empty-cell">No low-stock inventory records.</td></tr>
+        }
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel category-panel drilldown-panel">
+  <div class="panel-head chart-heading">
+    <div>
+      <div class="panel-title">Activity drilldown</div>
+      <p>
+        @if (selectedPartnerName()) {
+          Showing {{ selectedPartnerName() }}
+        } @else if (selectedCategory() !== 'all') {
+          Showing {{ categoryLabel(selectedCategory()) }}
+        } @else {
+          Latest 20 activities for the selected range
+        }
+      </p>
+    </div>
+    @if (selectedPartner() || selectedCategory() !== 'all') {
+      <button class="btn btn-ghost" type="button" (click)="clearDrilldown()">Clear drilldown</button>
+    }
+  </div>
+  <div class="analytics-table-wrap">
+    <table class="analytics-table compact-table">
+      <thead><tr><th>Category</th><th>Activity (IST)</th><th>Status</th><th>Partner / issue</th><th>Gross</th><th>Refund</th><th>Payout</th></tr></thead>
+      <tbody>
+        @for (event of recentEvents(); track event.id) {
+          <tr>
+            <td><button class="link-button" type="button" (click)="selectCategoryDrilldown(event.category)">{{ categoryLabel(event.category) }}</button></td>
+            <td>{{ formatDateTime(event.activityAt) }}</td>
+            <td>{{ event.status || '—' }}</td>
+            <td>{{ event.partnerName || event.issue || event.oem || '—' }}</td>
+            <td>{{ formatCurrency(event.grossRevenue) }}</td>
+            <td>{{ formatCurrency(event.refundAmount) }}</td>
+            <td>{{ formatCurrency(event.payoutAmount) }}</td>
+          </tr>
+        } @empty {
+          <tr><td colspan="7" class="empty-cell">No activities for the selected filters and range.</td></tr>
+        }
+      </tbody>
+    </table>
+  </div>
+</section>

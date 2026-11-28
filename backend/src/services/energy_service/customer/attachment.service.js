@@ -2,12 +2,13 @@ const fs = require('node:fs');
 const fsPromises = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { getPrivateUploadsDir } = require('../../../config/shared');
 const AppError = require('../../../utils/energy_service/AppError');
 const attachmentModel = require('../../../models/energy_service/customer/attachment.model');
 const presenters = require('./presenters');
 const support = require('./support');
 
-const ATTACHMENT_DIR = path.join(__dirname, '..', '..', '..', '..', 'private-uploads', 'energy_service', 'customer-attachments');
+const ATTACHMENT_DIR = path.join(getPrivateUploadsDir(), 'customer-attachments');
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const hasOleSignature = (buffer) => buffer.subarray(0, 8).equals(Buffer.from([
   0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,

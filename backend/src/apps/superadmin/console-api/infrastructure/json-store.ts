@@ -1,11 +1,11 @@
-import { randomInt, randomUUID } from 'node:crypto';
+﻿import { randomInt, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
-  createDefaultPermissionMatrix,
+  createDefaultPermissionMatrixSync,
   isRole,
-  PAGES,
-  ROLES,
+  getPAGESsync,
+  getROLES,
   validateRolePermissions,
   type PermissionMatrix,
   type Role,
@@ -50,7 +50,7 @@ export function isPersistentState(value: unknown): value is PersistentState {
     (state.version === 1 || state.version === 2) &&
     Array.isArray(state.users) &&
     !!state.permissions &&
-    ROLES.every((role) => validateRolePermissions(state.permissions?.[role])) &&
+    getROLES().every((role) => validateRolePermissions(state.permissions?.[role])) &&
     state.users.every((user) =>
       !!user &&
       typeof user.id === 'string' &&
@@ -97,9 +97,14 @@ export function isPersistentState(value: unknown): value is PersistentState {
 export class JsonStore {
   protected writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(protected readonly filePath: string) {}
+  constructor(
+    protected readonly filePath: string | undefined,
+    private readonly configuredAvatarDirectory?: string,
+  ) {}
 
   private get avatarDirectory(): string {
+    if (this.configuredAvatarDirectory) return this.configuredAvatarDirectory;
+    if (!this.filePath) throw new Error('A storage path is required for JSON-backed avatars.');
     return `${this.filePath}.avatars`;
   }
 
@@ -109,8 +114,6 @@ export class JsonStore {
     passwordSalt: string;
     passwordHash: string;
   }): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true });
-
     try {
       const state = await this.readState();
       let changed = false;
@@ -166,7 +169,7 @@ export class JsonStore {
           updatedAt: now,
         },
       ],
-      permissions: createDefaultPermissionMatrix(),
+      permissions: createDefaultPermissionMatrixSync(),
       auditEvents: [
         {
           id: randomUUID(),
@@ -231,72 +234,6 @@ export class JsonStore {
     });
   }
 
-  async ensureLocalDemoSuperadmin(user: {
-    name: string;
-    email: string;
-    passwordSalt: string;
-    passwordHash: string;
-  }): Promise<void> {
-    const email = user.email.trim().toLowerCase();
-    await this.mutate((state) => {
-      const existing = state.users.find((candidate) => candidate.email === email);
-      const previousDemo = email === 'demo-admin@localhost.test'
-        ? undefined
-        : state.users.find((candidate) =>
-            candidate.email === 'demo-admin@localhost.test' &&
-            candidate.name === 'Local Demo Superadmin' &&
-            candidate.role === 'superadmin',
-          );
-      const now = new Date().toISOString();
-      if (existing) {
-        if (existing.role !== 'superadmin') {
-          throw new StoreConflictError('The local demo account email is already assigned to a non-superadmin user.');
-        }
-        if (previousDemo && previousDemo.id !== existing.id) {
-          state.users = state.users.filter((candidate) => candidate.id !== previousDemo.id);
-        }
-        existing.disabled = false;
-        existing.passwordSalt = user.passwordSalt;
-        existing.passwordHash = user.passwordHash;
-        existing.updatedAt = now;
-        state.auditEvents.push(this.audit(null, 'system.local_demo_rotated', 'user', existing.id, { email }));
-        return;
-      }
-
-      if (previousDemo) {
-        previousDemo.email = email;
-        previousDemo.disabled = false;
-        previousDemo.passwordSalt = user.passwordSalt;
-        previousDemo.passwordHash = user.passwordHash;
-        previousDemo.updatedAt = now;
-        state.auditEvents.push(this.audit(null, 'system.local_demo_rotated', 'user', previousDemo.id, { email }));
-        return;
-      }
-
-      const demoUser: StoredUser = {
-        id: randomUUID(),
-        userCode: this.createUserCode(
-          new Set(state.users.map((existing) => existing.userCode).filter(
-            (code): code is string => typeof code === 'string',
-          )),
-        ),
-        name: user.name,
-        email,
-        phone: null,
-        avatarFile: null,
-        avatarContentType: null,
-        role: 'superadmin',
-        disabled: false,
-        passwordSalt: user.passwordSalt,
-        passwordHash: user.passwordHash,
-        createdAt: now,
-        updatedAt: now,
-      };
-      state.users.push(demoUser);
-      state.auditEvents.push(this.audit(null, 'system.local_demo_created', 'user', demoUser.id, { email }));
-    });
-  }
-
   async updateUser(
     id: string,
     changes: Pick<StoredUser, 'role' | 'disabled'>,
@@ -352,7 +289,7 @@ export class JsonStore {
       const previous = user.permissions ?? state.permissions[user.role];
       const updated = permissions ?? state.permissions[user.role];
       const changed: Record<string, string | boolean | number | null> = {};
-      for (const { key } of PAGES) {
+      for (const { key } of getPAGESsync()) {
         for (const action of ['view', 'create', 'edit', 'delete'] as const) {
           if (previous[key][action] !== updated[key][action]) {
             changed[`${key}.${action}`] = updated[key][action];
@@ -527,7 +464,7 @@ export class JsonStore {
     await this.mutate((state) => {
       const previous = state.permissions[role];
       const changes: Record<string, string | boolean | number | null> = {};
-      for (const { key } of PAGES) {
+      for (const { key } of getPAGESsync()) {
         for (const action of ['view', 'create', 'edit', 'delete'] as const) {
           if (previous[key][action] !== permissions[key][action]) {
             changes[`${key}.${action}`] = permissions[key][action];
@@ -635,6 +572,7 @@ export class JsonStore {
   }
 
   protected async readState(): Promise<PersistentState> {
+    if (!this.filePath) throw new Error('A storage path is required for JSON-backed state.');
     const contents = await readFile(this.filePath, 'utf8');
     let parsed: unknown;
     try {
@@ -649,6 +587,8 @@ export class JsonStore {
   }
 
   protected async writeState(state: PersistentState): Promise<void> {
+    if (!this.filePath) throw new Error('A storage path is required for JSON-backed state.');
+    await mkdir(dirname(this.filePath), { recursive: true });
     const tempPath = `${this.filePath}.${randomUUID()}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     await rename(tempPath, this.filePath);
@@ -657,4 +597,5 @@ export class JsonStore {
 
 export class StoreConflictError extends Error {}
 export class InvalidProfileImageError extends Error {}
+
 

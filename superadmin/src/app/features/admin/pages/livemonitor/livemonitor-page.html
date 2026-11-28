@@ -1,85 +1,618 @@
-<section class="page-head">
-  <div>
-    <h1>Live Monitor</h1>
-    <p>Partner and job activity from the latest connected database records.</p>
-  </div>
-  <span class="live-badge">● DATABASE</span>
-</section>
-
-<div class="stat-row">
-  <div class="stat-card live-stat-card">
-    <div class="stat-num">{{ ops.partnersOnline().length }}</div>
-    <div class="stat-lbl">Partners Online</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.liveJobs().length }}</div>
-    <div class="stat-lbl">Jobs In Progress</div>
-  </div>
-  <div class="stat-card alert">
-    <div class="stat-num">{{ ops.slaRiskJobs().length }}</div>
-    <div class="stat-lbl">SLA Breach Risk</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.activeRepairs().length }}</div>
-    <div class="stat-lbl">Repair Tickets</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.companies.length }}</div>
-    <div class="stat-lbl">Active Companies</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">₹{{ ops.todayServiceEarnings().toLocaleString('en-IN') }}</div>
-    <div class="stat-lbl">Today's recorded service earnings</div>
-  </div>
-</div>
-
-<div class="grid-2">
-  <div class="panel">
-    <div class="panel-head">
-      <div class="panel-title">Live Jobs</div>
+<main class="live-monitor-page">
+  <header class="page-head live-monitor-heading">
+    <div>
+      <span class="monitor-eyebrow">OPERATIONS CONTROL ROOM</span>
+      <h1>Live Monitor</h1>
+      <p>Open jobs, partner availability and service risks from connected records.</p>
     </div>
-    <div class="tbl-wrap live-jobs-scroll" role="region" aria-label="Live jobs table" tabindex="0">
-      <table>
-        <thead>
-          <tr>
-            <th>Job</th>
-            <th>Partner</th>
-            <th>SLA</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (job of ops.liveJobs(); track job.id) {
-          <tr>
-            <td><strong>{{ job.id }}</strong><small>{{ job.service }}</small></td>
-            <td>{{ job.partner ?? '— Unassigned —' }}</td>
-            <td>@if (job.slaMinsLeft !== null) { {{ job.slaMinsLeft }} min } @else { — }</td>
-            <td><span class="status-pill" [class]="job.status === 'sla-risk' ? 'bad' : 'info'">{{ job.status ===
-                'sla-risk' ? 'SLA risk' : 'In progress' }}</span></td>
-          </tr>
-          }
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <div class="panel-title">Partners Online</div>
-    </div>
-    <div class="panel-body card-list">
-      @for (p of ops.partnersOnline(); track p.id) {
-      <div class="op-card">
-        <div class="oc-icon">{{ p.name.charAt(0) }}</div>
-        <div class="oc-main">
-          <strong>{{ p.name }}</strong>
-          <small>{{ p.type }} · ★ {{ p.rating }} · {{ p.jobsDone }} jobs</small>
-        </div>
-        <span class="live-badge">●</span>
-      </div>
-      } @empty {
-      <p class="empty-state">No partners online.</p>
+    <div class="monitor-controls">
+      @if (ops.sourceStatus('jobs') === 'connected') {
+        <span class="live-badge"><span class="live-indicator"></span> Live database</span>
+      } @else if (ops.sourceStatus('jobs') === 'loading' || ops.sourceStatus('jobs') === 'unknown') {
+        <span class="monitor-source-badge">Connecting to database…</span>
+      } @else {
+        <span class="monitor-source-badge monitor-source-error">Database unavailable</span>
       }
+      <span class="last-sync-label">Last synced {{ elapsedSince(ops.jobsLastSyncedAt()) }} ago</span>
+      <button type="button" class="monitor-refresh-button" (click)="refreshLiveJobs()"
+        [disabled]="isRefreshingJobs()" aria-label="Refresh live jobs">
+        {{ isRefreshingJobs() ? 'Refreshing…' : 'Refresh' }}
+      </button>
+      <button type="button" class="monitor-auto-refresh" [attr.aria-pressed]="autoRefresh()"
+        (click)="toggleAutoRefresh()">
+        Auto-refresh {{ autoRefresh() ? 'on' : 'off' }}
+      </button>
     </div>
+  </header>
+
+  @if (ops.loadErrors()['jobs'] || ops.loadErrors()['livemonitor']) {
+    <div class="monitor-error" role="alert">{{ ops.loadErrors()['jobs'] || ops.loadErrors()['livemonitor'] }}</div>
+  }
+  @if (assignmentError()) {
+    <div class="monitor-error" role="alert">{{ assignmentError() }}</div>
+  }
+  @if (assignmentMessage()) {
+    <div class="monitor-success" role="status">{{ assignmentMessage() }}</div>
+  }
+
+  <section class="monitor-metrics" aria-label="Live operations summary">
+    <article class="monitor-metric">
+      <span class="monitor-metric-icon online-icon" aria-hidden="true"><span class="menu-icon" data-icon="users"></span></span>
+      <div><strong>{{ ops.partnersOnline().length }}</strong><span>Partners online</span></div>
+    </article>
+    <article class="monitor-metric queue-metric">
+      <span class="monitor-metric-icon queue-icon" aria-hidden="true"><span class="menu-icon" data-icon="list"></span></span>
+      <div class="queue-metric-copy">
+        <strong>{{ activeJobs().length }}</strong>
+        <span>Active open queue</span>
+        <div class="queue-breakdown">
+          <span>{{ jobCount('unassigned') }} unassigned</span>
+          <span>{{ jobCount('progress') }} in progress</span>
+          <span>{{ escalatedUnassignedJobs().length }} escalated · 15+ min</span>
+        </div>
+      </div>
+    </article>
+    <article class="monitor-metric" data-tone="warning">
+      <span class="monitor-metric-icon risk-icon" aria-hidden="true"><span class="menu-icon" data-icon="warn"></span></span>
+      <div><strong>{{ jobCount('at-risk') }}</strong><span>SLA at risk · under 1h</span></div>
+    </article>
+    <article class="monitor-metric" data-tone="danger">
+      <span class="monitor-metric-icon danger-icon" aria-hidden="true"><span class="menu-icon" data-icon="pulse"></span></span>
+      <div><strong>{{ jobCount('breached') }}</strong><span>SLA breached</span></div>
+    </article>
+    <article class="monitor-metric">
+      <span class="monitor-metric-icon repair-icon" aria-hidden="true"><span class="menu-icon" data-icon="tool"></span></span>
+      <div>
+        <strong>{{ ops.activeRepairs().length }}</strong><span>Active repairs</span>
+        @if (repairStageBreakdown().length) {
+          <div class="queue-breakdown">
+            @for (stage of repairStageBreakdown(); track stage.stage) {
+              <span>{{ stage.count }} {{ stage.label }}</span>
+            }
+          </div>
+        }
+        @if (auth.canAccess('repair')) {
+          <div class="queue-breakdown">
+            <span>{{ repairSlaBreaches().length }} repair SLA breach · 7d+</span>
+          </div>
+          <a class="panel-link" href="/repair">Review workshop queue <span aria-hidden="true">→</span></a>
+        }
+      </div>
+    </article>
+    <article class="monitor-metric">
+      <span class="monitor-metric-icon customer-icon" aria-hidden="true"><span class="menu-icon" data-icon="building"></span></span>
+      <div><strong>{{ ops.companies.length }}</strong><span>Customer companies</span></div>
+    </article>
+  </section>
+
+  <section class="operations-pulse" aria-label="Business and supply signals">
+    <article class="pulse-card open-value-card">
+      <span class="pulse-label">Estimated open job value</span>
+      <strong>{{ formatCurrency(openJobValue()) }}</strong>
+      <small>{{ pricedJobCount() }} of {{ activeJobs().length }} jobs have a stored estimate</small>
+      @if (unpricedJobCount()) {
+        <small>{{ unpricedJobCount() }} job{{ unpricedJobCount() === 1 ? '' : 's' }} not priced</small>
+      }
+    </article>
+    @if (auth.canAccess('analytics')) {
+      <article class="pulse-card">
+        <span class="pulse-label">Today's service earnings</span>
+        @if (ops.sourceStatus('analytics') === 'loading') {
+          <strong>Loading…</strong>
+        } @else if (ops.sourceStatus('analytics') === 'connected') {
+          <strong>{{ formatCurrency(todayServiceEarnings() ?? 0) }}</strong>
+        } @else {
+          <strong>—</strong>
+          <small>Analytics source unavailable</small>
+        }
+        @if (ops.sourceStatus('analytics') === 'connected') {
+          <a routerLink="/analytics">View analytics <span aria-hidden="true">→</span></a>
+        }
+      </article>
+    }
+    @if (auth.canAccess('finance')) {
+      <article class="pulse-card">
+        <span class="pulse-label">Pending settlements</span>
+        @if (ops.sourceStatus('finance') === 'loading') {
+          <strong>Loading…</strong>
+        } @else if (ops.sourceStatus('finance') === 'connected') {
+          <strong>{{ formatCurrency(pendingSettlementTotal() ?? 0) }}</strong>
+          <small>{{ ops.pendingPayouts().length }} earning records awaiting settlement</small>
+          <a routerLink="/finance">Review payouts <span aria-hidden="true">→</span></a>
+        } @else {
+          <strong>—</strong>
+          <small>Finance source unavailable</small>
+        }
+      </article>
+    }
+    @if (auth.canAccess('inventory')) {
+      <article class="pulse-card" [class.pulse-alert]="lowStockItems().length">
+        <span class="pulse-label">Low-stock parts</span>
+        @if (ops.sourceStatus('inventory') === 'loading') {
+          <strong>Loading…</strong>
+        } @else if (ops.sourceStatus('inventory') === 'connected') {
+          <strong>{{ lowStockItems().length }}</strong>
+          <small>{{ lowStockItems().length ? 'Review parts that may block service work.' : 'No low-stock items flagged.' }}</small>
+          <a routerLink="/inventory">Open inventory <span aria-hidden="true">→</span></a>
+        } @else {
+          <strong>—</strong>
+          <small>Inventory source unavailable</small>
+        }
+      </article>
+    }
+  </section>
+
+  @if (priorityJobs().length) {
+    <section class="live-action-strip" aria-labelledby="live-action-title">
+      <div class="live-action-heading">
+        <div>
+          <span class="action-kicker">NEEDS DISPATCH</span>
+          <h2 id="live-action-title">Dispatch escalation</h2>
+        </div>
+        <a routerLink="/jobs">Open job queue <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="quick-dispatch-list">
+        @for (job of priorityJobs(); track job.id) {
+          <article class="quick-dispatch-card">
+            <div class="quick-dispatch-copy">
+              <strong>{{ job.id }}</strong>
+              <span>{{ job.company }} · {{ isUnassigned(job) ? unassignedAgeLabel(job) : formatSla(job.slaMinsLeft) }}</span>
+              <small>{{ job.service }}</small>
+            </div>
+            @if (auth.canAccess('jobs', 'edit')) {
+              @if (bestPartnerForJob(job); as partner) {
+                <button type="button" class="assign-now-button" (click)="assignBestPartner(job)"
+                  [disabled]="assignmentPending()[job.id]">
+                  {{ assignmentPending()[job.id] ? 'Assigning…' : 'Assign ' + partner.name }}
+                </button>
+              } @else {
+                <span class="no-match-label">No online role match</span>
+              }
+            } @else {
+              <span class="no-match-label">Dispatch permission required</span>
+            }
+          </article>
+        }
+      </div>
+      <p class="dispatch-assignment-note">Unassigned jobs escalate after 15 minutes; this list also includes SLA breaches. Matches use role and saved partner skills. Job-specific spare requirements are not stored, so parts availability is not used to rank dispatch.</p>
+    </section>
+  }
+
+  @if (auth.canAccess('inventory') && ops.sourceStatus('inventory') === 'connected' && lowStockItems().length) {
+    <aside class="inventory-blocker-banner" role="status">
+      <span class="inventory-alert-icon" aria-hidden="true">!</span>
+      <div>
+        <strong>{{ lowStockItems().length }} low-stock part{{ lowStockItems().length === 1 ? '' : 's' }} may affect service work</strong>
+        <span>Job rows are tagged only when the recorded asset or fault names a matching low-stock item.</span>
+      </div>
+      <a routerLink="/inventory">Review inventory <span aria-hidden="true">→</span></a>
+    </aside>
+  }
+
+  <section class="live-monitor-grid" aria-label="Live jobs and available partners">
+    <article class="panel monitor-chart-panel">
+      <div class="panel-head live-panel-heading">
+        <div>
+          <span class="panel-eyebrow">LIVE QUEUE MIX</span>
+          <div class="panel-title">Dispatch health</div>
+          <p class="chart-panel-description">Open work grouped by assignment and SLA state.</p>
+        </div>
+        <span class="live-badge"><span class="live-indicator"></span> Live</span>
+      </div>
+      <div class="panel-body">
+        <app-admin-chart type="bar" [compact]="true" [labels]="['Unassigned', 'In progress', 'At risk', 'Breached']"
+          [datasets]="queueChartDatasets()" label="Active jobs by dispatch and SLA status" />
+      </div>
+    </article>
+    <article class="panel live-jobs-panel">
+      <div class="panel-head live-panel-heading">
+        <div>
+          <span class="panel-eyebrow">DISPATCH QUEUE</span>
+          <div class="panel-title">Active open jobs</div>
+        </div>
+        <span class="live-badge"><span class="live-indicator"></span> Monitoring</span>
+      </div>
+      <div class="live-job-tools">
+        <label class="live-search-field">
+          <span class="visually-hidden">Search live jobs</span>
+          <input type="search" [value]="searchTerm()" (input)="setSearch($event)"
+            placeholder="Search job, customer, site, asset…" aria-label="Search live jobs" />
+        </label>
+        <label class="live-type-filter">
+          <span class="visually-hidden">Filter by job type</span>
+          <select [value]="jobTypeFilter()" (change)="setJobType($event)" aria-label="Filter by job type">
+            <option value="all">All job types</option>
+            <option value="service">Service</option>
+            <option value="repair">Repair</option>
+            <option value="panel">Panel</option>
+            <option value="delivery">Delivery</option>
+          </select>
+        </label>
+        <label class="high-priority-filter">
+          <input type="checkbox" [checked]="highPriorityOnly()" (change)="setHighPriority($event)" />
+          <span>High priority only</span>
+        </label>
+        @if (auth.canAccess('jobs', 'edit')) {
+          <button type="button" class="bulk-assign-button" (click)="autoAssignSelected()"
+            [disabled]="!selectedJobIds().length">
+            Auto-assign top matches <span>{{ selectedJobIds().length }}</span>
+          </button>
+        }
+      </div>
+      <nav class="live-job-filters" aria-label="Filter open jobs">
+        <button type="button" [class.active]="jobFilter() === 'all'" [attr.aria-pressed]="jobFilter() === 'all'"
+          (click)="setJobFilter('all')">All open <span>{{ jobCount('all') }}</span></button>
+        <button type="button" [class.active]="jobFilter() === 'unassigned'" [attr.aria-pressed]="jobFilter() === 'unassigned'"
+          (click)="setJobFilter('unassigned')">Unassigned <span>{{ jobCount('unassigned') }}</span></button>
+        <button type="button" [class.active]="jobFilter() === 'progress'" [attr.aria-pressed]="jobFilter() === 'progress'"
+          (click)="setJobFilter('progress')">In progress <span>{{ jobCount('progress') }}</span></button>
+        <button type="button" [class.active]="jobFilter() === 'at-risk'" [attr.aria-pressed]="jobFilter() === 'at-risk'"
+          (click)="setJobFilter('at-risk')">At risk · &lt;1h <span>{{ jobCount('at-risk') }}</span></button>
+        <button type="button" [class.active]="jobFilter() === 'breached'" [attr.aria-pressed]="jobFilter() === 'breached'"
+          (click)="setJobFilter('breached')">Breached <span>{{ jobCount('breached') }}</span></button>
+      </nav>
+      <div class="tbl-wrap live-jobs-scroll" role="region" aria-label="Scrollable live jobs table" tabindex="0">
+        <table class="live-jobs-table">
+          <thead>
+            <tr>
+              <th class="selection-column">
+                @if (auth.canAccess('jobs', 'edit')) {
+                  <input type="checkbox" aria-label="Select unassigned jobs on this page"
+                    [checked]="allVisibleUnassignedSelected()"
+                    (change)="togglePageSelection($event)" />
+                }
+              </th>
+              <th>Job</th>
+              <th>Customer &amp; site</th>
+              <th>Asset &amp; fault</th>
+              <th>Partner dispatch</th>
+              <th>SLA</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (job of jobs(); track job.id) {
+              <tr [attr.data-urgent]="job.status === 'sla-risk' ? 'true' : null">
+                <td class="selection-column">
+                  @if (auth.canAccess('jobs', 'edit') && isUnassigned(job)) {
+                    <input type="checkbox" [checked]="isSelected(job.id)"
+                      [attr.aria-label]="'Select job ' + job.id + ' for auto-assignment'"
+                      (change)="toggleJobSelection(job.id, $event)" />
+                  }
+                </td>
+                <td>
+                  <button type="button" class="live-job-id" (click)="openJobDetails(job.id, $event)">
+                    {{ job.id }}
+                  </button>
+                  <small>{{ job.service }}</small>
+                  @if (job.priority === 'critical' || job.priority === 'high') {
+                    <span class="job-priority-tag" [attr.data-priority]="job.priority">{{ job.priority }} priority</span>
+                  }
+                </td>
+                <td>
+                  <strong>{{ job.company }}</strong>
+                  <small>{{ job.site }}{{ job.companySiteCount ? ' · ' + job.companySiteCount + ' sites' : '' }}</small>
+                  @if (currentLocation(job); as location) {
+                    <a class="job-live-location-link" [href]="mapUrl(location)" target="_blank" rel="noopener noreferrer">
+                      GPS live · {{ elapsedSince(location.updatedAt) }} ago
+                    </a>
+                  } @else if (job.lastLocationAt) {
+                    <small class="job-stale-location">{{ locationLabel(job) }}</small>
+                  }
+                  <span class="amc-tag" [attr.data-amc]="job.companyAmc ?? 'none'">
+                    {{ job.companyAmc === 'active' ? 'Active AMC' : job.companyAmc === 'expiring' ? 'Expiring soon' : 'On-demand' }}
+                  </span>
+                </td>
+                <td class="job-technical-cell">
+                  <strong>{{ job.asset || 'Asset not recorded' }}</strong>
+                  <small>{{ job.issue || 'No fault description recorded' }}</small>
+                  @for (part of lowStockForJob(job); track part.sku) {
+                    <span class="low-stock-tag">Parts low · {{ part.name }} ({{ part.stock }})</span>
+                  }
+                </td>
+                <td class="dispatch-cell">
+                  @if (job.partner) {
+                    <span class="assigned-partner">{{ job.partner }}</span>
+                  } @else {
+                    <span class="unassigned-label">Needs assignment</span>
+                    <small [class.dispatch-escalated]="isDispatchEscalated(job)">
+                      {{ unassignedAgeLabel(job) }}{{ isDispatchEscalated(job) ? ' · escalate' : '' }}
+                    </small>
+                  }
+                  @if (auth.canAccess('jobs', 'edit')) {
+                    <label class="partner-select-label">
+                      <span class="visually-hidden">Assign provider for {{ job.id }}</span>
+                      <select [value]="job.partnerId ?? ''" (change)="assign(job, $event)"
+                        [disabled]="assignmentPending()[job.id] || (!matchingPartners(job).length && !job.partnerId)"
+                        [attr.aria-label]="'Assign role-matched online partner for ' + job.id">
+                        <option value="">{{ job.partnerId ? 'Unassign current provider' : matchingPartners(job).length ? 'Assign matching partner…' : 'No matching partner online' }}</option>
+                        @if (job.partnerId) {
+                          <option [value]="job.partnerId">{{ job.partner }} · current</option>
+                        }
+                        @for (partner of matchingPartners(job); track partner.id) {
+                          @if (partner.id !== job.partnerId) {
+                            <option [value]="partner.id">{{ partner.name }} · ★ {{ partner.rating.toFixed(1) }} · {{ formatExperience(partner.experienceYears) }} · {{ partner.jobsDone }} done{{ partnerSkillMatchCount(job, partner) ? ' · skill match' : '' }}</option>
+                          }
+                        }
+                      </select>
+                    </label>
+                  }
+                  @if (bestPartnerForJob(job); as partner) {
+                    <small class="best-match-label">Best match: {{ partner.name }}</small>
+                  }
+                </td>
+                <td>
+                  <strong class="sla-value" [class.sla-overdue]="job.slaMinsLeft !== null && job.slaMinsLeft <= 0">
+                    {{ formatSla(job.slaMinsLeft) }}
+                  </strong>
+                </td>
+                <td><span class="live-status-pill" [attr.data-status]="job.status">{{ jobStatusLabel(job) }}</span></td>
+              </tr>
+            } @empty {
+              <tr><td colspan="7" class="empty-table-cell">No jobs match the selected filters.</td></tr>
+            }
+          </tbody>
+        </table>
+      </div>
+      <footer class="live-jobs-pagination">
+        <span>Showing {{ filteredJobs().length ? (currentJobPage() - 1) * 20 + 1 : 0 }}–{{ visibleRangeEnd() }} of {{ filteredJobs().length }}</span>
+        <div>
+          <button type="button" (click)="previousJobPage()" [disabled]="currentJobPage() <= 1">Previous</button>
+          <span>Page {{ currentJobPage() }} of {{ jobPageCount() }}</span>
+          <button type="button" (click)="nextJobPage()" [disabled]="currentJobPage() >= jobPageCount()">Next</button>
+        </div>
+      </footer>
+      <p class="table-footnote">Job status is based on the shared database queue: overdue SLA → breached, then unassigned, otherwise in progress.</p>
+    </article>
+
+    <article class="panel partner-roster-panel">
+      <div class="panel-head live-panel-heading">
+        <div>
+          <span class="panel-eyebrow">ROLE-TO-JOB MATCH</span>
+          <div class="panel-title">Partners online</div>
+        </div>
+      </div>
+      <div class="panel-body card-list partner-roster-scroll" role="region" aria-label="Scrollable online partners" tabindex="0">
+        @for (partner of ops.partnersOnline(); track partner.id) {
+          <article class="op-card live-partner-card">
+            <div class="oc-icon">{{ partner.name.charAt(0).toUpperCase() }}</div>
+            <div class="oc-main">
+              <div class="partner-name-line">
+                <strong>{{ partner.name }}</strong>
+                @if (partner.verified) { <span class="verified-partner">Verified</span> }
+              </div>
+              <small>★ {{ partner.rating.toFixed(1) }} · {{ formatExperience(partner.experienceYears) }} · {{ partner.jobsDone }} completed</small>
+              <span class="partner-role-label">{{ partner.type }} · {{ partner.city }}</span>
+              <small>{{ partnerGpsLabel(partner) }}</small>
+              <span class="partner-best-match" [class.no-job-match]="partnerMatchLabel(partner) === 'No matching open job'">
+                {{ partnerMatchLabel(partner) }}
+              </span>
+              @if (auth.canAccess('directory')) {
+                <button type="button" class="track-partner-button" (click)="openPartnerProfile(partner, $event)">
+                  Track &amp; view profile
+                </button>
+              }
+            </div>
+            <span class="online-indicator" aria-label="Online"></span>
+          </article>
+        } @empty {
+          <p class="empty-state">No partners are currently online.</p>
+        }
+      </div>
+      <div class="partner-match-legend">
+        <span><i data-role="supplier"></i> DEL · Supplier</span>
+        <span><i data-role="repairing"></i> REP · Repairing</span>
+        <span><i data-role="panelmaker"></i> PANEL · Panelmaker</span>
+        <span><i data-role="service"></i> SVC · Service</span>
+      </div>
+    </article>
+  </section>
+</main>
+
+@if (selectedJob(); as job) {
+  <div class="job-detail-backdrop" role="presentation" (click)="closeJobDetails()">
+    <aside class="job-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="job-detail-title"
+      tabindex="-1"
+      (click)="$event.stopPropagation()" (keydown.escape)="closeJobDetails()">
+      <header class="job-detail-header">
+        <div>
+          <span class="panel-eyebrow">JOB DETAIL</span>
+          <h2 id="job-detail-title">{{ job.id }}</h2>
+          <p>{{ job.service }} · {{ jobStatusLabel(job) }}</p>
+        </div>
+        <button type="button" aria-label="Close job details" autofocus (click)="closeJobDetails()">×</button>
+      </header>
+      <div class="job-detail-content">
+        <section class="job-detail-facts" aria-label="Job summary">
+          <div><span>SLA</span><strong>{{ formatSla(job.slaMinsLeft) }}</strong></div>
+          <div><span>Partner</span><strong>{{ job.partner || 'Unassigned' }}</strong></div>
+          <div><span>Estimated value</span><strong>{{ job.amount > 0 ? formatCurrency(job.amount) : 'Not priced' }}</strong><small>{{ estimateLabel(job) }}</small></div>
+          <div><span>Created</span><strong>{{ formatDate(job.createdAt) }}</strong></div>
+          <div><span>Assigned</span><strong>{{ formatDate(job.assignedAt) }}</strong></div>
+        </section>
+        <section class="job-detail-section">
+          <h3>Customer &amp; site</h3>
+          <dl>
+            <div><dt>Customer</dt><dd>{{ job.company }}</dd></div>
+            <div><dt>Contact</dt><dd>{{ job.requester || 'Not recorded' }}{{ job.contactPhone ? ' · ' + job.contactPhone : '' }}</dd></div>
+            <div><dt>Location</dt><dd>{{ job.siteAddress || job.site }}</dd></div>
+            <div><dt>AMC</dt><dd>{{ job.companyAmc === 'active' ? 'Active' : job.companyAmc === 'expiring' ? 'Expiring soon' : 'On-demand' }}</dd></div>
+          </dl>
+          @if (jobMapUrl(job); as url) {
+            <a class="job-detail-map-link" [href]="url" target="_blank" rel="noopener noreferrer">Open site map</a>
+          }
+          @if (currentLocation(job); as location) {
+            <div class="tracking-location-panel">
+              <div>
+                <span class="tracking-location-label">Current job GPS</span>
+                <strong>{{ location.latitude.toFixed(5) }}, {{ location.longitude.toFixed(5) }}</strong>
+                <small>Updated {{ elapsedSince(location.updatedAt) }} ago</small>
+              </div>
+              <a class="tracking-map-link" [href]="mapUrl(location)" target="_blank" rel="noopener noreferrer">Open live position</a>
+            </div>
+          } @else if (job.lastLocationAt || job.liveLocation?.updatedAt) {
+            <p class="job-stale-location">{{ locationLabel(job) }} · not shown as live</p>
+          }
+        </section>
+        <section class="job-detail-section">
+          <h3>Asset &amp; fault</h3>
+          <dl>
+            <div><dt>Asset</dt><dd>{{ job.asset || 'Not recorded' }}</dd></div>
+            <div><dt>Fault description</dt><dd>{{ job.issue || 'No fault description recorded' }}</dd></div>
+            <div><dt>Job type</dt><dd>{{ job.jobType || job.category || 'Not recorded' }}</dd></div>
+          </dl>
+          @for (part of lowStockForJob(job); track part.sku) {
+            <span class="low-stock-tag">Low stock · {{ part.name }} ({{ part.stock }} / reorder {{ part.low }})</span>
+          }
+        </section>
+        <section class="job-detail-section">
+          <h3>Recorded job activity</h3>
+          <ol class="job-detail-timeline">
+            @for (entry of jobHistory(job); track $index) {
+              <li><strong>{{ entry.title }}</strong><span>{{ entry.detail }}</span><time>{{ formatDate(entry.at) }}</time></li>
+            } @empty {
+              <li class="job-detail-empty">No job history has been recorded.</li>
+            }
+          </ol>
+        </section>
+      </div>
+    </aside>
   </div>
-</div>
+}
+
+@if (trackedPartner(); as partner) {
+  <div class="live-profile-backdrop" role="presentation" (click)="closePartnerProfile()">
+    <section class="live-profile-dialog" role="dialog" aria-modal="true"
+      aria-labelledby="live-profile-title" tabindex="-1"
+      (click)="$event.stopPropagation()" (keydown.escape)="closePartnerProfile()">
+      <header class="live-profile-header">
+        <div class="live-profile-identity">
+          <span class="live-profile-avatar" aria-hidden="true">{{ partner.name.charAt(0).toUpperCase() }}</span>
+          <div>
+            <span class="panel-eyebrow">LIVE PARTNER PROFILE</span>
+            <h2 id="live-profile-title">{{ partner.name }}</h2>
+            <p>{{ partner.type }} · {{ partner.city }} · {{ trackingDetails()?.registration?.registrationId || 'Loading account…' }}</p>
+          </div>
+        </div>
+        <button type="button" class="live-profile-close" aria-label="Close partner profile" autofocus
+          (click)="closePartnerProfile()">×</button>
+      </header>
+
+      <div class="live-profile-content">
+        @if (trackingError()) {
+          <div class="monitor-error" role="alert">
+            {{ trackingError() }}
+            <button type="button" class="live-profile-retry" (click)="refreshPartnerProfile()">Retry</button>
+          </div>
+        }
+        @if (trackingLoading() && !trackingDetails()) {
+          <div class="live-profile-loading" role="status">Loading verified partner and tracking data…</div>
+        }
+        @if (trackingDetails(); as details) {
+          <section class="tracking-summary-grid" aria-label="Partner summary">
+            <article><span>App status</span><strong>{{ details.registration.profile.online === null ? 'Not reported' : details.registration.profile.online ? details.registration.profile.busy ? 'Online · Busy' : 'Online' : 'Offline' }}</strong></article>
+            <article><span>Rating</span><strong>{{ details.registration.profile.rating === null ? 'Not rated' : '★ ' + details.registration.profile.rating.toFixed(1) }}</strong></article>
+            <article><span>Experience</span><strong>{{ formatExperience(details.registration.profile.experienceYears) }}</strong></article>
+            <article><span>Completed jobs</span><strong>{{ details.registration.profile.completedServices }} / {{ details.registration.profile.totalServices }}</strong></article>
+          </section>
+
+          @if (details.account.currentWork; as work) {
+            <section class="tracking-work-section" aria-labelledby="tracking-work-title">
+              <div class="tracking-section-heading">
+                <div>
+                  <span class="panel-eyebrow">CURRENT ASSIGNMENT</span>
+                  <h3 id="tracking-work-title">{{ work.title }}</h3>
+                  <p>{{ work.reference || 'Job reference not recorded' }} · {{ work.stage.replace('_', ' ') }}</p>
+                </div>
+                <span class="tracking-signal-pill" [class.tracking-signal-stale]="!work.liveLocation">
+                  {{ work.liveLocation ? 'GPS live' : work.lastLocationUpdateAt ? 'GPS stale' : 'No GPS signal' }}
+                </span>
+              </div>
+              <div class="tracking-location-panel">
+                @if (work.liveLocation; as location) {
+                  <div>
+                    <span class="tracking-location-label">Latest reported coordinates</span>
+                    <strong>{{ location.latitude.toFixed(5) }}, {{ location.longitude.toFixed(5) }}</strong>
+                    <small>Updated {{ elapsedSince(work.lastLocationUpdateAt) }} ago · {{ formatDate(work.lastLocationUpdateAt) }}</small>
+                  </div>
+                  <a class="tracking-map-link" [href]="mapUrl(location)" target="_blank" rel="noopener noreferrer">Open map</a>
+                } @else {
+                  <div>
+                    <span class="tracking-location-label">Live GPS unavailable</span>
+                    <strong>{{ work.lastLocationUpdateAt ? 'Last signal ' + elapsedSince(work.lastLocationUpdateAt) + ' ago' : 'No location update recorded' }}</strong>
+                    <small>GPS permission and the partner app are required. Fresh coordinates are limited to checked-in work and the last 2 minutes.</small>
+                  </div>
+                }
+              </div>
+              <div class="tracking-work-facts">
+                <div><span>Job ID</span><strong>{{ work.id }}</strong></div>
+                <div><span>Service site</span><strong>{{ work.site || 'Not recorded' }}</strong></div>
+                <div><span>Checked in</span><strong>{{ formatDate(work.checkedInAt) }}</strong></div>
+                <div><span>On-site duration</span><strong>{{ work.checkedInAt ? elapsedSince(work.checkedInAt) : 'Check-in not recorded' }}</strong></div>
+                <div><span>Job created</span><strong>{{ formatDate(work.startedAt) }}</strong></div>
+                <div><span>Recorded route distance</span><strong>{{ work.distanceKm === null ? 'Not recorded' : work.distanceKm + ' km' }}</strong></div>
+                <div><span>Recorded travel estimate</span><strong>{{ work.travelEtaMinutes === null ? 'Not recorded' : work.travelEtaMinutes + ' min' }}</strong></div>
+              </div>
+              <div class="tracking-work-history">
+                <h4>Latest recorded work steps</h4>
+                @for (step of currentJobTimeline(); track $index) {
+                  <div class="tracking-step-row">
+                    <span><strong>{{ step.label }}</strong> · {{ step.status.replace('_', ' ') }}</span>
+                    <time>{{ formatDate(step.at) }}</time>
+                  </div>
+                } @empty {
+                  <p class="tracking-muted-copy">No workflow steps have been recorded for this job yet.</p>
+                }
+              </div>
+            </section>
+          } @else {
+            <section class="tracking-no-work" role="status">
+              <strong>No active job assigned</strong>
+              <span>GPS tracking is not available when the partner has no active checked-in job.</span>
+            </section>
+          }
+
+          <section class="tracking-details-grid">
+            <article class="tracking-detail-card">
+              <h3>Partner details</h3>
+              <dl>
+                <div><dt>Role</dt><dd>{{ details.registration.role.replace('_', ' ') }}</dd></div>
+                <div><dt>Account status</dt><dd>{{ details.registration.status }}</dd></div>
+                <div><dt>Phone</dt><dd>{{ details.registration.phone || 'Not recorded' }}</dd></div>
+                <div><dt>Email</dt><dd>{{ details.registration.email || 'Not recorded' }}</dd></div>
+                <div><dt>Partner since</dt><dd>{{ formatDate(details.account.partnerSince) }}</dd></div>
+                <div><dt>Service areas</dt><dd>{{ displayList(details.registration.profile.serviceAreas) }}</dd></div>
+                <div><dt>Specializations</dt><dd>{{ displayList(details.registration.profile.specializations) }}</dd></div>
+              </dl>
+            </article>
+            <article class="tracking-detail-card">
+              <h3>Recent job activity</h3>
+              @for (activity of recentPartnerActivity(); track activity.id) {
+                <div class="tracking-activity-row">
+                  <div><strong>{{ activity.reference || activity.title }}</strong><span>{{ activity.title }} · {{ activity.status.replace('_', ' ') }}</span></div>
+                  <time>{{ formatDate(activity.createdAt) }}</time>
+                </div>
+              } @empty {
+                <p class="tracking-muted-copy">No job history is available for this account.</p>
+              }
+            </article>
+          </section>
+
+          @if (auth.canAccess('finance') && details.financialSummary.kind === 'payouts') {
+            <section class="tracking-finance-strip" aria-label="Partner earnings summary">
+              <div><span>Total earnings</span><strong>{{ formatCurrency(details.financialSummary.total) }}</strong></div>
+              <div><span>Paid</span><strong>{{ formatCurrency(details.financialSummary.paid) }}</strong></div>
+              <div><span>Pending payout</span><strong>{{ formatCurrency(details.financialSummary.pending) }}</strong></div>
+            </section>
+          }
+        }
+      </div>
+
+      <footer class="live-profile-footer">
+        <span>Access is audited. Profile refreshes every 30 seconds while this window is open.</span>
+        <span>{{ trackingLoading() ? 'Refreshing…' : 'Last refreshed ' + formatDate(trackingRefreshedAt()) }}</span>
+        <button type="button" class="live-profile-retry" [disabled]="trackingLoading()" (click)="refreshPartnerProfile()">Refresh now</button>
+      </footer>
+    </section>
+  </div>
+}

@@ -9,6 +9,8 @@
 
 process.env.DATABASE_URL = 'sqlite://./data/smoke_test.db';
 process.env.NODE_ENV = 'test';
+process.env.HOST = '127.0.0.1';
+process.env.PORT = '5098';
 
 const fs = require('fs');
 const path = require('path');

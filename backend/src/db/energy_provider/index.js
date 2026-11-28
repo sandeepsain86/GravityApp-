@@ -1,14 +1,11 @@
 /**
  * Database access layer.
  *
- * A single tiny abstraction over PostgreSQL (pg), MySQL (mysql2) and SQLite
- * (node:sqlite) so the rest of the application never has to care which engine
- * is configured.
+ * The runtime connects to PostgreSQL using the shared DB_* settings.
+ * SQLite URLs are accepted only by isolated smoke tests.
  *
- * The connection is described entirely by DATABASE_URL, e.g.
- *   postgres://energy_user:s3cret@127.0.0.1:5432/energy_hub
- *   mysql://energy_user:s3cret@127.0.0.1:3306/energy_hub
- *   sqlite://./data/energy_hub.db
+ * A test may set DATABASE_URL=sqlite://./data/smoke_test.db before loading
+ * configuration; normal development and production never need that variable.
  */
 
 const path = require('path');
@@ -19,12 +16,7 @@ const { renderTable, renderIndex, renderType, quote } = require('./dialect');
 const BACKEND_ROOT = path.join(__dirname, '..', '..', '..');
 
 const parseDatabaseUrl = (url) => {
-  const fallback = { driver: 'sqlite', file: path.join(BACKEND_ROOT, 'data', 'energy_hub.db') };
-
   if (!url) {
-    // When DATABASE_URL is not set, fall back to the discrete DB_* variables.
-    // Defaults now point at PostgreSQL so the configured .env (postgres on
-    // 5432) is used instead of silently creating a local sqlite file.
     return {
       driver: 'postgres',
       host: config.DB_HOST,
@@ -32,18 +24,23 @@ const parseDatabaseUrl = (url) => {
       user: config.DB_USER,
       password: config.DB_PASSWORD,
       database: config.DB_NAME,
-      ssl: config.DB_SSL ? { rejectUnauthorized: false } : undefined,
+      ssl: config.DB_SSL_OPTIONS,
     };
   }
 
   const match = /^([a-z0-9+]+):\/\/(.*)$/i.exec(url);
-  if (!match) return fallback;
+  if (!match) {
+    throw new Error('Invalid test database URL; expected sqlite:// or a supported database scheme.');
+  }
 
   const scheme = match[1].toLowerCase();
   const rest = match[2];
 
   if (scheme === 'sqlite') {
-    const file = rest.replace(/^\/\//, '') || './data/energy_hub.db';
+    const file = rest.replace(/^\/\//, '');
+    if (!file) {
+      throw new Error('SQLite test database URLs must include a file path.');
+    }
     return {
       driver: 'sqlite',
       file: path.isAbsolute(file) ? file : path.join(BACKEND_ROOT, file),
@@ -67,7 +64,7 @@ const parseDatabaseUrl = (url) => {
       user: user ? decodeURIComponent(user) : config.DB_USER,
       password: password ? decodeURIComponent(password) : config.DB_PASSWORD,
       database: database ? decodeURIComponent(database) : config.DB_NAME,
-      ssl: config.DB_SSL ? { rejectUnauthorized: false } : undefined,
+      ssl: config.DB_SSL_OPTIONS,
     };
   }
 
@@ -92,7 +89,7 @@ const parseDatabaseUrl = (url) => {
     };
   }
 
-  return fallback;
+  throw new Error(`Unsupported database URL scheme: ${scheme}`);
 };
 
 const nowIso = () => new Date().toISOString();
@@ -253,6 +250,12 @@ class Database {
     if (!await this.hasColumn('jobs', 'scheduled_at')) {
       await this.run(
         `ALTER TABLE ${quote(this.driver, 'jobs')} ADD COLUMN ${quote(this.driver, 'scheduled_at')} ${renderType(this.driver, scheduledAtColumn)}`
+      );
+    }
+    const assignedAtColumn = tables.jobs.columns.assigned_at;
+    if (!await this.hasColumn('jobs', 'assigned_at')) {
+      await this.run(
+        `ALTER TABLE ${quote(this.driver, 'jobs')} ADD COLUMN ${quote(this.driver, 'assigned_at')} ${renderType(this.driver, assignedAtColumn)}`
       );
     }
     const specializationStatusColumn = tables.partner_applications.columns.specialization_status;

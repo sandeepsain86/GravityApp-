@@ -12,7 +12,7 @@
 .avatar-fallback { display: grid; place-items: center; background: rgba(var(--theme-1-rgb), .12); color: var(--theme-1); font-size: 23px; font-weight: 800; }
 .eyebrow { color: var(--theme-1); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .hero-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.hero-title h1 { margin: 3px 0; color: var(--t); font-size: 21px; }
+.hero-title h1 { margin: 3px 0; color: var(--t); font-size: 16px; }
 .hero-copy p { margin: 4px 0 7px; color: var(--t-2); font-size: 12px; }
 .identity-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--t-3); font-size: 10px; overflow-wrap: anywhere; }
 .hero-actions { display: grid; justify-items: end; gap: 7px; color: var(--t-3); font-size: 10px; text-align: right; }
@@ -128,7 +128,7 @@ td strong { color: var(--t); }
   .profile-hero { align-items: flex-start; flex-direction: column; padding: 14px; }
   .hero-identity { align-items: flex-start; gap: 9px; }
   .profile-avatar { width: 48px; height: 48px; }
-  .hero-title h1 { font-size: 18px; }
+  .hero-title h1 { font-size: 16px; }
   .hero-actions { justify-items: start; text-align: left; }
   .identity-meta,
   .snapshot-list,

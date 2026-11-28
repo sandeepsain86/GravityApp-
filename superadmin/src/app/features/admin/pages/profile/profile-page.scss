@@ -1,7 +1,7 @@
 :host { display: block; }
 .profile-page { display: grid; gap: 14px; max-width: 1440px; margin: 0 auto; color: var(--t); }
 .profile-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
-.profile-heading h1 { margin: 0; font-size: 18px; }
+.profile-heading h1 { margin: 0; font-size: 16px; }
 .security-link { color: var(--theme-1); font-size: 11px; font-weight: 700; text-decoration: none; }
 .identity-card,
 .profile-card,
@@ -131,15 +131,15 @@
 }
 
 .profile-heading h1 {
-  font-size: clamp(22px, 2.5vw, 28px);
-  font-weight: 780;
-  letter-spacing: -.035em;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -.02em;
 }
 
 .profile-heading p {
   margin: 4px 0 0;
   color: var(--t-2);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 

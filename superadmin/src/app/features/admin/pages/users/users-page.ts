@@ -10,6 +10,7 @@ import {
   type RolePermissions,
 } from '../../../../core/models/user.model';
 import { AuthService } from '../../../../core/services/auth.service';
+import { TAB_INSTANCE_KEY, TAB_SESSION_KEY } from '../../../../core/http/tab-session.interceptor';
 
 @Component({
   selector: 'app-users-page',
@@ -186,13 +187,23 @@ export class UsersPage {
 
   async openUserPanel(user: AdminUser): Promise<void> {
     if (!this.canOpenUserPanel(user) || this.openingUserPanelId()) return;
+    this.error.set(null);
+    this.notice.set(null);
 
     const newTab = window.open('about:blank', '_blank');
     if (!newTab) {
       this.error.set('Allow pop-ups to open the user panel in a new tab.');
       return;
     }
-    newTab.opener = null;
+    try {
+      newTab.sessionStorage.setItem(TAB_INSTANCE_KEY, crypto.randomUUID());
+      newTab.sessionStorage.removeItem(TAB_SESSION_KEY);
+      newTab.opener = null;
+    } catch {
+      newTab.close();
+      this.error.set('The new tab could not be prepared securely. Please try again.');
+      return;
+    }
     this.error.set(null);
     this.notice.set(null);
     this.openingUserPanelId.set(user.id);

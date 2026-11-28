@@ -55,22 +55,3 @@
   </button>
 </form>
 
-@if (localDemoCredentials(); as demo) {
-  <aside class="credential-help" aria-label="Local development demo sign-in">
-    <div class="credential-heading">
-      <strong>Local demo access</strong>
-      <span class="local-badge">LOCAL ONLY</span>
-    </div>
-    <p>Temporary superadmin credentials for this development session.</p>
-    <dl>
-      <dt>Email</dt>
-      <dd><code>{{ demo.email }}</code></dd>
-      <dt>Password</dt>
-      <dd><code>{{ demo.password }}</code></dd>
-    </dl>
-    <button class="demo-use-button" type="button" (click)="useDemoCredentials()">Use demo account</button>
-  </aside>
-} @else if (demoLoadError()) {
-  <p class="demo-load-error" role="status">Local demo credentials could not be loaded. Check that the backend is running.</p>
-}
-

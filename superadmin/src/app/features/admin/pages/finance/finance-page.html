@@ -7,18 +7,22 @@
 
 <div class="stat-row">
   <div class="stat-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="rupee" aria-hidden="true"></span></div>
     <div class="stat-num">₹{{ ops.monthRevenue().toLocaleString('en-IN') }}</div>
     <div class="stat-lbl">Recorded earnings this month</div>
   </div>
   <div class="stat-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="pulse" aria-hidden="true"></span></div>
     <div class="stat-num">{{ ops.pendingPayouts().length }}</div>
     <div class="stat-lbl">Partner earnings pending</div>
   </div>
   <div class="stat-card alert">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="warn" aria-hidden="true"></span></div>
     <div class="stat-num">₹{{ ops.pendingPayoutTotal().toLocaleString('en-IN') }}</div>
     <div class="stat-lbl">Pending Payout Amount</div>
   </div>
   <div class="stat-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="check" aria-hidden="true"></span></div>
     <div class="stat-num">{{ ops.payouts().filter(p => p.status === 'paid').length }}</div>
     <div class="stat-lbl">Earnings marked paid</div>
   </div>

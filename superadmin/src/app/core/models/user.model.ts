@@ -185,15 +185,20 @@ export interface PlatformRegistrationDetails {
     lastLoginAt: string | null;
     updatedAt: string | null;
     currentWork: {
+      id: string;
       reference: string | null;
       title: string;
       stage: string;
       site: string | null;
+      startedAt: string | null;
+      checkedInAt: string | null;
       lastLocationUpdateAt: string | null;
       liveLocation: {
         latitude: number;
         longitude: number;
       } | null;
+      distanceKm: number | null;
+      travelEtaMinutes: number | null;
     } | null;
     partnerSince: string | null;
     travelRadiusKm: number | null;

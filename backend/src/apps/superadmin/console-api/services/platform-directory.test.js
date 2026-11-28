@@ -110,6 +110,8 @@ test('platform directory returns private-safe profiles with stable app registrat
 
 test('partner profile includes job stages, documents and payout breakdown without bank identifiers', async () => {
   let locationUpdatedAt = new Date().toISOString();
+  let liveLatitude = 18.5204;
+  let liveLongitude = 73.8567;
   const providerDb = {
     async query(sql) {
       if (sql.includes('FROM users')) {
@@ -137,20 +139,33 @@ test('partner profile includes job stages, documents and payout breakdown withou
         }];
       }
       if (sql.includes('FROM jobs')) {
-        return [{
-          id: 101,
-          reference_id: 'JOB-101',
-          job_type: 'service',
-          title: 'Inverter service',
-          status: 'in_progress',
-          category: 'Electrical',
-          equipment: 'Inverter',
-          stage: 'diagnosed',
-          created_at: '2026-02-01T00:00:00.000Z',
-          completed_at: '2026-02-02T00:00:00.000Z',
-          total_bill: 2500,
-          payout_amount: 1800,
-        }];
+        return [
+          {
+            id: 102,
+            reference_id: 'JOB-102',
+            job_type: 'service',
+            title: 'Newly accepted service',
+            status: 'accepted',
+            stage: 'accepted',
+            created_at: '2026-03-01T00:00:00.000Z',
+          },
+          {
+            id: 101,
+            reference_id: 'JOB-101',
+            job_type: 'service',
+            title: 'Inverter service',
+            status: 'in_progress',
+            category: 'Electrical',
+            equipment: 'Inverter',
+            stage: 'checked_in',
+            created_at: '2026-02-01T00:00:00.000Z',
+            completed_at: '2026-02-02T00:00:00.000Z',
+            total_bill: 2500,
+            payout_amount: 1800,
+            distance_km: 8.5,
+            estimated_drive_minutes: 24,
+          },
+        ];
       }
       if (sql.includes('FROM earnings')) {
         return [{
@@ -173,13 +188,23 @@ test('partner profile includes job stages, documents and payout breakdown withou
         return [{ job_id: 101, from_stage: 'accepted', to_stage: 'completed', at: '2026-02-02T00:00:00.000Z' }];
       }
       if (sql.includes('FROM job_workflow_steps')) {
-        return [{ job_id: 101, step_key: 'diagnosis', status: 'completed', at: '2026-02-02T00:00:00.000Z' }];
+        return [
+          {
+            job_id: 101,
+            step_key: 'checkin',
+            status: 'done',
+            checked_in_at: '2026-02-01T01:00:00.000Z',
+            completed_at: '2026-02-01T01:00:00.000Z',
+            at: '2026-02-01T01:00:00.000Z',
+          },
+          { job_id: 101, step_key: 'diagnosis', status: 'completed', at: '2026-02-02T00:00:00.000Z' },
+        ];
       }
       if (sql.includes('FROM job_live_locations')) {
         return [{
           job_id: 101,
-          latitude: 18.5204,
-          longitude: 73.8567,
+          latitude: liveLatitude,
+          longitude: liveLongitude,
           updated_at: locationUpdatedAt,
         }];
       }
@@ -191,11 +216,14 @@ test('partner profile includes job stages, documents and payout breakdown withou
   const details = await directory.getRegistrationDetails('energy-hub:21');
 
   assert.equal(details.registration.registrationId, 'EH-PARTNER-21');
-  assert.equal(details.activity[0].reference, 'JOB-101');
-  assert.equal(details.activity[0].timeline.length, 2);
+  assert.equal(details.activity.find((item) => item.reference === 'JOB-101').timeline.length, 3);
   assert.equal(details.account.onboarding.currentStep, 5);
   assert.equal(details.account.documents[0].status, 'verified');
   assert.equal(details.account.currentWork.reference, 'JOB-101');
+  assert.equal(details.account.currentWork.startedAt, '2026-02-01T00:00:00.000Z');
+  assert.equal(details.account.currentWork.checkedInAt, '2026-02-01T01:00:00.000Z');
+  assert.equal(details.account.currentWork.distanceKm, 8.5);
+  assert.equal(details.account.currentWork.travelEtaMinutes, 24);
   assert.deepEqual(details.account.currentWork.liveLocation, { latitude: 18.5204, longitude: 73.8567 });
   assert.equal(details.financialSummary.pending, 1800);
   assert.equal(details.earnings[0].commission, 500);
@@ -206,6 +234,10 @@ test('partner profile includes job stages, documents and payout breakdown withou
   const staleDetails = await directory.getRegistrationDetails('energy-hub:21');
   assert.equal(staleDetails.account.currentWork.liveLocation, null);
   assert.ok(staleDetails.account.currentWork.lastLocationUpdateAt);
+  locationUpdatedAt = new Date().toISOString();
+  liveLatitude = 91;
+  const invalidLocationDetails = await directory.getRegistrationDetails('energy-hub:21');
+  assert.equal(invalidLocationDetails.account.currentWork.liveLocation, null);
 });
 
 test('customer profile includes service, repair, company, site and marketplace history', async () => {

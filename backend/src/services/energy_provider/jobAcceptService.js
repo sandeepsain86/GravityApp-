@@ -58,14 +58,16 @@ const JobAcceptService = {
           throw ApiError.conflict('You already have an active job. Complete it first.');
         }
 
+        const assignedAt = nowIso();
         const result = await handle.run(
           `UPDATE \`jobs\`
               SET \`status\` = 'accepted',
                   \`assigned_partner_id\` = ?,
                   \`stage\` = ?,
+                  \`assigned_at\` = ?,
                   \`updated_at\` = ?
             WHERE \`id\` = ? AND \`status\` = 'open' AND \`assigned_partner_id\` IS NULL`,
-          [user.id, firstStage, nowIso(), job.id]
+          [user.id, firstStage, assignedAt, assignedAt, job.id]
         );
         if (!result.affectedRows) {
           throw ApiError.conflict('This job has already been taken');

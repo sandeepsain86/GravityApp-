@@ -12,23 +12,22 @@ This is the single API server used by both mobile apps and the Superadmin web UI
 
 ## Setup
 
-Copy `.env.example` to `.env`, configure PostgreSQL and a unique Superadmin password of at least 12 characters, then install dependencies:
+Copy `.env.example` to `.env`, set the PostgreSQL `DB_*` fields, `BASE_URL`, and a unique Superadmin password of at least 12 characters, then install dependencies. Use the same `BASE_URL` key locally and in production, changing only its value. `DATABASE_URL` is not used; all modules share the `DB_*` settings. Local development may use `DB_SSL=false`; production requires `DB_SSL=true` and verifies the database certificate. Set `DB_SSL_CA` to a trusted PEM certificate (use literal `\n` sequences for newlines) when the database uses a private CA; otherwise Node's system trust roots are used.
 
 ```powershell
 Copy-Item .env.example .env
 npm ci
 ```
 
-Set `SUPERADMIN_EMAIL`, `SUPERADMIN_NAME`, and `SUPERADMIN_PASSWORD` before the first start. The console admin records are stored in the separate `data/superadmin-access-control.json` file (or `SUPERADMIN_DATA_FILE`) so they do not conflict with the operational PostgreSQL database.
-Superadmin users can update their display name and phone number, manage a JPEG, PNG, or WebP profile photo, and change their password from their profile page. Photos are resized in the browser, limited to 512 KB, and stored in a private sibling `<data-file>.avatars` directory; sign-in email remains read-only because email verification is not configured. Password changes require the current password and a new password of 12–200 characters; the current session is retained and other active sessions are revoked.
+Set `SUPERADMIN_EMAIL`, `SUPERADMIN_NAME`, and `SUPERADMIN_PASSWORD` before the first start. If migrating an existing JSON state file, set `SUPERADMIN_DATA_FILE` to its path relative to the backend folder; unset it after the first import. Superadmin console state is stored in the PostgreSQL `superadmin.console_state` table as one JSONB record; session and impersonation tables are created idempotently at startup. The legacy `/api/superadmin/auth/register` endpoint now requires an authenticated token with both the `superadmin` role and `superadmin` app claim. Public uploads use `UPLOADS_DIR` and `/uploads`; private customer attachments and Superadmin avatars use `PRIVATE_UPLOADS_DIR` and are served only through authenticated API routes. Live deployments must mount persistent storage at both configured directories.
 
-Shared company details are stored in the Superadmin JSON state and can be edited only by accounts with `settings:edit`. The initial business phone is `6483948880`; company name and GSTIN remain blank until provided, and `contact@example.invalid` is a non-deliverable email placeholder. Access summaries identify whether page access comes from the user's role defaults or a custom assignment and link to each permitted console page.
+Superadmin users can update their display name and phone number, manage a JPEG, PNG, or WebP profile photo, and change their password from their profile page. Photos are resized in the browser, limited to 512 KB, and stored under `PRIVATE_UPLOADS_DIR/superadmin-avatars`; sign-in email remains read-only because email verification is not configured. Password changes require the current password and a new password of 12–200 characters; the current session is retained and other active sessions are revoked.
 
-For local development only, `ENABLE_LOCAL_DEMO_LOGIN=true` enables a separate superadmin demo account using `LOCAL_DEMO_EMAIL` and `LOCAL_DEMO_PASSWORD`. The login page displays a fill-in card for this account, and the backend only reveals or accepts its credentials on loopback requests. The server refuses to start this feature outside `NODE_ENV=development`; keep it disabled for shared or production deployments.
+Shared company details are stored in the Superadmin database state and can be edited only by accounts with `settings:edit`; they remain empty until configured. Access summaries identify whether page access comes from the user's role defaults or a custom assignment and link to each permitted console page.
 
 Superadmin page visibility and API access use each signed-in account's effective `view` permission. Role defaults apply unless **User access** sets an account-specific matrix; this also allows an individual Superadmin account to be restricted without changing the full-access Superadmin role default. Accounts cannot change their own page access.
 
-From **Users & Roles**, a Superadmin with user view/edit access can open an active non-Superadmin account in a separate tab. The one-time launch link expires after 60 seconds; the tab receives a 30-minute session scoped to that user and their effective permissions. The Superadmin's role and user-management access are rechecked on requests, actions are audited with the initiating Superadmin attributed, password changes are blocked while viewing another account, and ending the tab session does not replace the original tab's login.
+From **Users & Roles**, a signed-in Superadmin with user view/edit access can open an active non-Superadmin account directly in a separate tab without entering a password again. Normal sign-in still requires an email and password. The audit log records a standard reason for this access. The one-time launch secret is stored as a hash, expires after 60 seconds, and is bound to the active PostgreSQL-backed Superadmin session. The tab receives a 30-minute session scoped to that user and their effective permissions. The Superadmin's role and user-management access are rechecked on requests, sessions and launch secrets are revocable across backend instances, actions are audited with the initiating Superadmin, and password changes are blocked while viewing another account.
 
 The Superadmin **App Registrations** page is available at `/directory`. It combines Energy Hub partner accounts with Service Admin user accounts, assigns stable unique registration IDs, and shows saved profile, service, payout, and rating information. Its API endpoint is `GET /api/superadmin/console/admin/registrations` and requires the `directory:view` permission. Existing access-control files are migrated to deny this personal-data view to viewer accounts by default.
 
@@ -40,7 +39,7 @@ Energy Hub partners can share foreground GPS while checked in to an active servi
 npm run dev
 ```
 
-The shared API listens on port 3000 by default. From `E:\gravityhub\superadmin\frontend`, run `npm ci` once and `npm start -- --host 127.0.0.1`; its `/api` proxy points to this server.
+The shared API listens on the `HOST` and `PORT` values in `.env` (the template uses port 3000). From `E:\gravityhub\superadmin\frontend`, run `npm ci` once and `npm start -- --host 127.0.0.1`; its `/api` proxy points to this server.
 
 ## Tests
 

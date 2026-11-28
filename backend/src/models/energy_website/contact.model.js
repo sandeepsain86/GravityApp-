@@ -1,11 +1,4 @@
-const { Pool } = require('pg');
-
-let pool;
-
-function db() {
-  if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
-  return pool;
-}
+const { pool } = require('../../config/postgres');
 
 function present(row) {
   if (!row) return null;
@@ -24,7 +17,7 @@ function present(row) {
 }
 
 async function create(input) {
-  const { rows } = await db().query(
+  const { rows } = await pool.query(
     `INSERT INTO website_contacts (name, email, phone, subject, message)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
@@ -34,7 +27,7 @@ async function create(input) {
 }
 
 async function find() {
-  const { rows } = await db().query(
+  const { rows } = await pool.query(
     'SELECT * FROM website_contacts ORDER BY created_at DESC'
   );
   return {

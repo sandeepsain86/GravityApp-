@@ -11,8 +11,9 @@ const { toPublicCompany } = require('./company.service');
 const auditService = require('./audit.service');
 const { withTransaction } = require('../../utils/energy_service/transaction');
 const rbacService = require('./rbac.service');
+const { getPublicUploadsDir } = require('../../config/shared');
 
-const AVATAR_DIR = path.join(__dirname, '..', '..', '..', 'uploads', 'energy_service', 'avatars');
+const AVATAR_DIR = path.join(getPublicUploadsDir(), 'avatars');
 const AVATAR_TYPES = {
   'image/jpeg': 'jpg',
   'image/png': 'png',

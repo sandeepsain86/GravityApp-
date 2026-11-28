@@ -1,18 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
-const { env } = require('../../src/config/energy_service/env');
+const { getDatabaseConfig } = require('../../src/config/shared');
 
-async function ensureDatabase(databaseUrl) {
-  const url = new URL(databaseUrl);
-  const dbName = decodeURIComponent(url.pathname.replace(/^\//, ''));
+async function ensureDatabase(database) {
+  const dbName = database.database;
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(dbName)) {
-    throw new Error('DATABASE_URL database name contains unsupported characters.');
+    throw new Error('DB_NAME contains unsupported characters.');
   }
 
-  url.pathname = '/postgres';
   const adminPool = new Pool({
-    connectionString: url.toString(),
+    ...database,
+    database: 'postgres',
     connectionTimeoutMillis: 5000,
     max: 1,
   });
@@ -32,9 +31,10 @@ async function ensureDatabase(databaseUrl) {
 }
 
 async function migrate() {
-  await ensureDatabase(env.databaseUrl);
+  const database = getDatabaseConfig();
+  await ensureDatabase(database);
   const pool = new Pool({
-    connectionString: env.databaseUrl,
+    ...database,
     connectionTimeoutMillis: 5000,
     max: 1,
   });

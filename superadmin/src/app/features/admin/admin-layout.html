@@ -30,6 +30,7 @@
             [open]="!sidebarOpen() || expandedNavGroup() === group.label">
             <summary class="sidebar-group-label" [title]="group.label"
               (click)="toggleNavGroup(group.label, $event)">
+              <span class="sidebar-group-icon menu-icon" [attr.data-icon]="group.icon" aria-hidden="true"></span>
               <span>{{ group.label }}</span>
             </summary>
             @for (item of group.items; track item.route) {
@@ -127,7 +128,54 @@
     </svg>
   </button>
 
+  <div class="header-search-wrap">
+    <label class="header-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" aria-hidden="true">
+        <circle cx="10.8" cy="10.8" r="6.3" />
+        <path d="m16 16 4.2 4.2" />
+      </svg>
+      <input #headerSearchInput type="search" role="combobox" aria-label="Search navigation"
+        aria-controls="header-search-results" aria-autocomplete="list"
+        [attr.aria-expanded]="headerSearch().length > 0"
+        placeholder="Search pages and tools…" [value]="headerSearch()"
+        (input)="searchHeader($event)" />
+      <span class="search-shortcut">Ctrl K</span>
+    </label>
+    @if (headerSearch()) {
+      <div id="header-search-results" class="header-search-results" role="listbox">
+        @for (item of headerSearchMatches(); track item.route) {
+          <a role="option" [routerLink]="item.route" (click)="headerSearch.set('')">
+            <span class="menu-icon" [attr.data-icon]="item.icon"></span>
+            <span>{{ item.label }}</span>
+            <small>{{ item.group }}</small>
+          </a>
+        } @empty {
+          <p>No matching pages</p>
+        }
+      </div>
+    }
+  </div>
+
   <div class="ms-auto d-flex align-items-center gap-2">
+    @if (fullscreenError(); as error) {
+      <span class="fullscreen-error" role="alert">{{ error }}</span>
+    }
+    <button class="btn btn-link btn-square fullscreen-toggle" type="button" (click)="toggleFullscreen()"
+      [attr.aria-label]="fullscreen() ? 'Exit fullscreen' : 'Enter fullscreen'"
+      [title]="fullscreen() ? 'Exit fullscreen' : 'Enter fullscreen'">
+      @if (fullscreen()) {
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8 3v5H3M16 3v5h5M8 21v-5H3m13 5v-5h5" />
+        </svg>
+      } @else {
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 8V3h5m8 0h5v5M3 16v5h5m8 0h5v-5" />
+        </svg>
+      }
+    </button>
     <!-- light / dark (template #btn-layout-modes-dark switch) -->
     <button class="btn btn-link btn-square" (click)="toggleMode()" aria-label="Toggle light/dark mode">
       @if (theme.mode() === 'dark') {

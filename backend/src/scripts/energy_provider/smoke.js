@@ -21,6 +21,7 @@ const run = async () => {
   console.log(`Database ready (${db.describe()})\n`);
   const jobColumns = await db.query('PRAGMA table_info("jobs")');
   check('existing database schema is migrated with appointment time', jobColumns.some((column) => column.name === 'scheduled_at'));
+  check('existing database schema is migrated with assignment time', jobColumns.some((column) => column.name === 'assigned_at'));
 
   await registrationCases();
   const partners = await acceptanceCases();

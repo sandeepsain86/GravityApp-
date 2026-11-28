@@ -110,9 +110,14 @@ describe('UsersPage user-panel launch', () => {
     expect(panel.filteredUsers().map((user) => user.userCode)).toEqual(['456-CD_']);
   });
 
-  it('opens the one-time launch link in a new tab', async () => {
+  it('opens the one-time launch link directly from the Superadmin session', async () => {
     const replace = vi.fn();
-    const newTab = { opener: window, location: { replace }, close: vi.fn() } as unknown as Window;
+    const newTab = {
+      opener: window,
+      location: { replace },
+      close: vi.fn(),
+      sessionStorage: { setItem: vi.fn(), removeItem: vi.fn() },
+    } as unknown as Window;
     const open = vi.spyOn(window, 'open').mockReturnValue(newTab);
 
     await panel.openUserPanel(target);

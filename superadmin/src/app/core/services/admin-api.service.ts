@@ -31,6 +31,37 @@ export interface AccessRolesResponse {
   permissions: PermissionMatrix;
 }
 
+export interface OperationAssignment {
+  changed: boolean;
+  jobId: string;
+  reference: string;
+  partnerId: string | null;
+  partnerName?: string;
+  assignedAt?: string;
+}
+
+export interface OperationRepairTransition {
+  id: string;
+  ticketNumber: string;
+  status: string;
+  stage: string;
+  fromStatus: string;
+  updatedAt: string;
+}
+
+export interface ProjectMilestoneInput {
+  title?: string;
+  status?: string;
+  plannedStart?: string | null;
+  dueDate?: string;
+  clientSignoffStatus?: string;
+  leadEngineerName?: string | null;
+  budgetAmount?: number | null;
+  materialCost?: number | null;
+  partnerPayout?: number | null;
+  billedAmount?: number | null;
+}
+
 @Injectable({ providedIn: 'root' })
 export class AdminApiService {
   private readonly http = inject(HttpClient);
@@ -39,6 +70,81 @@ export class AdminApiService {
     return firstValueFrom(
       this.http.get<T>(
         `${API_PREFIX}/admin/operations/${encodeURIComponent(domain)}`,
+        { withCredentials: true },
+      ),
+    );
+  }
+
+  async assignOperationJob(reference: string, partnerId: string | null): Promise<OperationAssignment> {
+    const response = await firstValueFrom(
+      this.http.patch<{ assignment: OperationAssignment }>(
+        `${API_PREFIX}/admin/operations/jobs/${encodeURIComponent(reference)}/assignment`,
+        { partnerId },
+        { withCredentials: true },
+      ),
+    );
+    return response.assignment;
+  }
+
+  async transitionRepairStage(
+    reference: string,
+    stage: string,
+    remarks: string,
+    details?: {
+      estimatedCost?: number;
+      quoteApproved?: boolean;
+      parts?: Array<{ sku: string; name: string; quantity: number }>;
+      benchPartnerId?: string;
+      benchPartnerName?: string;
+    },
+  ): Promise<OperationRepairTransition> {
+    const response = await firstValueFrom(
+      this.http.patch<{ repair: OperationRepairTransition }>(
+        `${API_PREFIX}/admin/operations/repairs/${encodeURIComponent(reference)}/stage`,
+        { stage, remarks, ...details },
+        { withCredentials: true },
+      ),
+    );
+    return response.repair;
+  }
+
+  async transitionProjectStatus(
+    reference: string,
+    status: string,
+    note = '',
+  ): Promise<{ id: string; request_number: string; status: string }> {
+    const response = await firstValueFrom(
+      this.http.patch<{ project: { id: string; request_number: string; status: string } }>(
+        `${API_PREFIX}/admin/operations/projects/${encodeURIComponent(reference)}/status`,
+        { status, note },
+        { withCredentials: true },
+      ),
+    );
+    return response.project;
+  }
+
+  async createProjectMilestone(
+    reference: string,
+    milestone: ProjectMilestoneInput,
+  ): Promise<void> {
+    await firstValueFrom(
+      this.http.post<{ milestone: unknown }>(
+        `${API_PREFIX}/admin/operations/projects/${encodeURIComponent(reference)}/milestones`,
+        milestone,
+        { withCredentials: true },
+      ),
+    );
+  }
+
+  async updateProjectMilestone(
+    reference: string,
+    milestoneId: string,
+    changes: ProjectMilestoneInput,
+  ): Promise<void> {
+    await firstValueFrom(
+      this.http.patch<{ milestone: unknown }>(
+        `${API_PREFIX}/admin/operations/projects/${encodeURIComponent(reference)}/milestones/${encodeURIComponent(milestoneId)}`,
+        changes,
         { withCredentials: true },
       ),
     );
@@ -75,6 +181,17 @@ export class AdminApiService {
     const response = await firstValueFrom(
       this.http.get<{ details: PlatformRegistrationDetails }>(
         `${API_PREFIX}/admin/registrations/${encodeURIComponent(id)}`,
+        { withCredentials: true },
+      ),
+    );
+    return response.details;
+  }
+
+  async openTrackingProfile(id: string): Promise<PlatformRegistrationDetails> {
+    const response = await firstValueFrom(
+      this.http.post<{ details: PlatformRegistrationDetails }>(
+        `${API_PREFIX}/admin/registrations/${encodeURIComponent(id)}/tracking-access`,
+        {},
         { withCredentials: true },
       ),
     );

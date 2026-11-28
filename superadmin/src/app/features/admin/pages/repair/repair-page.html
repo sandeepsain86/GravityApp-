@@ -1,59 +1,461 @@
 <section class="page-head">
   <div>
     <h1>Repair Center</h1>
-    <p>Repair tickets from the live database. Workflow transitions are not connected.</p>
+    <p>Track workshop tickets through the persisted repair lifecycle.</p>
   </div>
-  <span class="badge b-g">● {{ ops.activeRepairs().length }} active tickets</span>
+  <span class="badge b-g">● {{ activeTicketCount() }} active tickets</span>
 </section>
 
-<div class="stat-row">
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.repairs().filter(r => r.stage === 'received').length }}</div>
-    <div class="stat-lbl">Received</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.repairs().filter(r => r.stage === 'diagnosis').length }}</div>
-    <div class="stat-lbl">Diagnosis</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.repairs().filter(r => r.stage === 'repairing').length }}</div>
-    <div class="stat-lbl">Repairing</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.repairs().filter(r => r.stage === 'qc').length }}</div>
-    <div class="stat-lbl">QC</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-num">{{ ops.repairs().filter(r => r.stage === 'delivered').length }}</div>
-    <div class="stat-lbl">Delivered</div>
-  </div>
-</div>
+@if (ops.loadErrors()['repair']; as loadError) {
+  <div class="repair-message repair-message-error" role="alert">{{ loadError }}</div>
+}
 
-<div class="panel">
-  <div class="tbl-wrap repair-table-scroll" role="region" aria-label="Repair tickets table" tabindex="0">
-    <table>
-      <thead>
-        <tr>
-          <th>Ticket</th>
-          <th>Device</th>
-          <th>Partner</th>
-          <th>Received</th>
-          <th>Est. Cost</th>
-          <th>Stage</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (r of ops.repairs(); track r.id) {
-        <tr>
-          <td><strong>{{ r.id }}</strong></td>
-          <td>{{ r.device }}</td>
-          <td>{{ r.partner }}</td>
-          <td>{{ r.inAt }}</td>
-          <td>{{ r.cost === null ? 'Not recorded' : '₹' + r.cost.toLocaleString('en-IN') }}</td>
-          <td><span class="status-pill" [class]="stagePillClass(r.stage)">{{ stageLabel(r.stage) }}</span></td>
-        </tr>
-        }
-      </tbody>
-    </table>
+<section class="repair-kpis" aria-label="Repair center executive metrics">
+  @for (metric of executiveKpis(); track metric.key) {
+    <article class="repair-kpi-card" [attr.data-tone]="metric.tone">
+      <span class="repair-kpi-icon-tile" aria-hidden="true">
+        <span class="repair-kpi-icon menu-icon" [attr.data-icon]="metric.icon"></span>
+      </span>
+      <div class="repair-kpi-copy">
+        <span>{{ metric.label }}</span>
+        <strong>{{ metric.value }}</strong>
+        <small>{{ metric.detail }}</small>
+      </div>
+    </article>
+  }
+</section>
+
+<section class="repair-chart-grid" aria-label="Repair performance charts">
+  <article class="panel repair-chart-card">
+    <header>
+      <div>
+        <span class="panel-eyebrow">WORKSHOP FLOW</span>
+        <h2>Repair lifecycle funnel</h2>
+        <p>Ticket count at each saved workflow stage. Select a bar to filter the queue.</p>
+      </div>
+    </header>
+    <app-admin-chart type="bar" [compact]="true" [horizontal]="true"
+      [labels]="stageCounts().map(item => stageLabel(item.stage))"
+      [datasets]="stageChartDatasets()" label="Repair tickets by workflow stage"
+      (chartSelect)="onChartSelect('stage', $event)" />
+  </article>
+
+  <article class="panel repair-chart-card">
+    <header>
+      <div>
+        <span class="panel-eyebrow">SLA WATCH</span>
+        <h2>Ticket aging</h2>
+        <p>Active tickets by age. The red 30+ day bucket is the most urgent.</p>
+      </div>
+    </header>
+    <app-admin-chart type="bar" [compact]="true"
+      [labels]="agingCounts().map(item => item.label)"
+      [datasets]="agingChartDatasets()" label="Active repair tickets by age bucket"
+      (chartSelect)="onChartSelect('age', $event)" />
+  </article>
+
+  <article class="panel repair-chart-card">
+    <header>
+      <div>
+        <span class="panel-eyebrow">30-DAY VELOCITY</span>
+        <h2>Arrivals vs. delivered</h2>
+        <p>Daily workshop intake compared with completed deliveries.</p>
+      </div>
+    </header>
+    <app-admin-chart type="line" [compact]="true"
+      [labels]="trendSeries().labels" [datasets]="trendChartDatasets()"
+      label="Daily repair arrivals and deliveries over the last 30 days"
+      (chartSelect)="onChartSelect('trend', $event)" />
+  </article>
+
+  <article class="panel repair-chart-card repair-mix-card">
+    <header>
+      <div>
+        <span class="panel-eyebrow">CAPACITY &amp; MIX</span>
+        <h2>Device brands &amp; bench workload</h2>
+        <p>Active tickets grouped by OEM and assigned technician.</p>
+      </div>
+    </header>
+    <div class="repair-mix-charts">
+      <div>
+        <h3>Device brand</h3>
+        <app-admin-chart type="doughnut" [compact]="true"
+          [labels]="brandCounts().map(item => item.label)" [datasets]="brandChartDatasets()"
+          label="Active repair tickets by device brand"
+          (chartSelect)="onChartSelect('brand', $event)" />
+      </div>
+      <div>
+        <h3>Partner workload</h3>
+        <app-admin-chart type="bar" [compact]="true"
+          [labels]="partnerCounts().map(item => item.label)" [datasets]="partnerChartDatasets()"
+          label="Active repair tickets by bench partner"
+          (chartSelect)="onChartSelect('partner', $event)" />
+      </div>
+    </div>
+  </article>
+</section>
+
+<section class="repair-queue panel" aria-labelledby="repair-queue-title">
+  <div class="repair-queue-heading">
+    <div>
+      <span class="panel-eyebrow">ACTION QUEUE · {{ filteredRepairs().length }} TICKETS</span>
+      <h2 id="repair-queue-title">Workshop tickets</h2>
+      <p>Use a quick filter or select a chart segment to narrow this queue.</p>
+    </div>
+    <div class="repair-queue-controls">
+      <label class="repair-test-filter">
+        <input type="checkbox" [checked]="includeTestTickets()" (change)="onIncludeTestChange($event)">
+        Include sandbox
+      </label>
+      <div class="repair-view-toggle" role="group" aria-label="Queue display">
+        <button type="button" [class.active]="queueView() === 'table'" [attr.aria-pressed]="queueView() === 'table'"
+          (click)="queueView.set('table')">Table</button>
+        <button type="button" [class.active]="queueView() === 'board'" [attr.aria-pressed]="queueView() === 'board'"
+          (click)="queueView.set('board')">Kanban</button>
+      </div>
+    </div>
   </div>
-</div>
+
+  <nav class="repair-filter-pills" aria-label="Filter repair tickets">
+    @for (filter of queueFilters(); track filter.id) {
+      <button type="button" [class.active]="queueFilter() === filter.id && !chartFilter()"
+        [attr.aria-pressed]="queueFilter() === filter.id && !chartFilter()"
+        (click)="setQueueFilter(filter.id)">
+        {{ filter.label }} <span>{{ filter.count }}</span>
+      </button>
+    }
+    @if (chartFilter(); as activeChartFilter) {
+      <button type="button" class="repair-chart-filter" (click)="clearQueueFilters()">
+        Chart: {{ activeChartFilter.value }} <span aria-hidden="true">×</span>
+      </button>
+    }
+  </nav>
+
+  @if (auth.canAccess('repair', 'edit') && queueView() === 'table') {
+    <div class="repair-bulk-toolbar">
+      <label>
+        <input type="checkbox" [checked]="allVisibleSelected()" (change)="toggleVisibleSelection($event)">
+        Select visible active tickets (max 100)
+      </label>
+      <span>{{ selectedTicketIds().length }} / 100 selected</span>
+      <select aria-label="Assign selected tickets to partner" [value]="bulkPartnerId()" (change)="onBulkPartnerChange($event)">
+        <option value="">Choose verified partner</option>
+        @for (partner of benchPartners(); track partner.id) {
+          <option [value]="partner.id">{{ partner.name }} · {{ partnerLoad(partner.id) }} active repairs</option>
+        }
+      </select>
+      <button type="button" class="repair-stage-button" [disabled]="saving() || !selectedTicketIds().length || !bulkPartnerId()"
+        (click)="assignSelectedToPartner()">
+        {{ saving() ? 'Assigning…' : 'Bulk assign partner' }}
+      </button>
+    </div>
+  }
+
+  @if (queueView() === 'table') {
+    <div class="tbl-wrap repair-table-scroll" role="region" aria-label="Repair tickets table" tabindex="0">
+      <table>
+        <thead>
+          <tr>
+            @if (auth.canAccess('repair', 'edit')) { <th>Select</th> }
+            <th>Ticket</th>
+            <th>Device</th>
+            <th>Received</th>
+            <th>Age / SLA</th>
+            <th>Partner</th>
+            <th>Est. Cost</th>
+            <th>Stage</th>
+            <th>Status</th>
+            <th>Stage action</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (ticket of filteredRepairs(); track ticket.id) {
+            <tr [class.repair-row-critical]="(ageDays(ticket) ?? 0) > 7 && isActive(ticket)">
+              @if (auth.canAccess('repair', 'edit')) {
+                <td>
+                  @if (isActive(ticket)) {
+                    <input type="checkbox" aria-label="Select {{ ticket.ticketNumber }}"
+                      [checked]="selectedTicketIds().includes(ticket.id)"
+                      (change)="toggleTicketSelection(ticket.id, $event)">
+                  }
+                </td>
+              }
+              <td>
+                <button type="button" class="repair-ticket-link" (click)="openDetails(ticket)">
+                  {{ ticket.ticketNumber }}
+                </button>
+              </td>
+              <td>
+                <span class="repair-device-cell">{{ ticket.device }}</span>
+                @if (isAmcCovered(ticket)) { <span class="repair-row-badge repair-amc-badge">AMC covered</span> }
+                @if (isAwaitingParts(ticket)) { <span class="repair-row-badge repair-parts-badge">Parts delayed</span> }
+                @if (isUnassignedEscalated(ticket)) { <span class="repair-row-badge repair-parts-badge">Partner needed · 2h+</span> }
+              </td>
+              <td>{{ dateLabel(ticket.inAt) }}</td>
+              <td>
+                <span class="repair-age-pill" [class.critical]="(ageDays(ticket) ?? 0) > 7 && isActive(ticket)">
+                  {{ tatLabel(ticket) }}
+                </span>
+              </td>
+              <td>{{ ticket.benchPartnerName || ticket.partner || 'Not assigned' }}</td>
+              <td>{{ ticket.cost === null ? 'Not recorded' : currencyLabel(ticket.cost) }}</td>
+              <td><span class="status-pill" [class]="stagePillClass(ticket.stage)">{{ stageLabel(ticket.stage) }}</span></td>
+              <td>{{ statusLabel(ticket.status) }}</td>
+              <td>
+                @if (auth.canAccess('repair', 'edit') && nextStage(ticket); as targetStage) {
+                  <button type="button" class="repair-stage-button" [disabled]="saving()" (click)="advanceToStage(ticket, targetStage)">
+                    {{ nextActionLabel(ticket) }}
+                  </button>
+                } @else {
+                  <span class="repair-muted">No action</span>
+                }
+              </td>
+            </tr>
+          } @empty {
+            <tr>
+              <td [attr.colspan]="auth.canAccess('repair', 'edit') ? 10 : 9" class="repair-empty">
+                {{ includeTestTickets() ? 'No repair tickets match the selected filters.' : 'No operational tickets. Include sandbox data to inspect hidden test tickets.' }}
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @else {
+    <div class="repair-kanban" aria-label="Repair tickets by workflow stage">
+      @for (stage of workflowStages; track stage) {
+        <section class="repair-kanban-column">
+          <header><h3>{{ stageLabel(stage) }}</h3><span>{{ ticketsForStage(stage).length }}</span></header>
+          @for (ticket of ticketsForStage(stage); track ticket.id) {
+            <button type="button" class="repair-kanban-card" (click)="openDetails(ticket)">
+              <strong>{{ ticket.ticketNumber }}</strong>
+              <span>{{ ticket.device }}</span>
+              <small [class.critical]="(ageDays(ticket) ?? 0) > 7 && isActive(ticket)">{{ tatLabel(ticket) }}</small>
+              <small>{{ ticket.benchPartnerName || ticket.partner || 'Unassigned' }}</small>
+            </button>
+          } @empty {
+            <p class="repair-kanban-empty">No tickets</p>
+          }
+        </section>
+      }
+    </div>
+  }
+</section>
+
+@if (selectedRepair(); as ticket) {
+  <div class="repair-drawer-backdrop" role="presentation" (click)="closeDetails()">
+    <aside
+      class="repair-drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="repair-drawer-title"
+      tabindex="-1"
+      (click)="$event.stopPropagation()"
+      (keydown.escape)="closeDetails()"
+    >
+      <header class="repair-drawer-header">
+        <div>
+          <span class="panel-eyebrow">REPAIR TICKET</span>
+          <h2 id="repair-drawer-title">{{ ticket.ticketNumber }}</h2>
+          <p>{{ ticket.clientName || 'Client not recorded' }} · {{ ticket.siteName || 'Site not recorded' }}</p>
+        </div>
+        <button type="button" aria-label="Close repair details" (click)="closeDetails()">×</button>
+      </header>
+
+      <div class="repair-drawer-content">
+        @if (error()) {
+          <div class="repair-message repair-message-error" role="alert">{{ error() }}</div>
+        }
+        @if (notice()) {
+          <div class="repair-message repair-message-success" role="status">{{ notice() }}</div>
+        }
+
+        <section class="repair-facts" aria-label="Repair summary">
+          <div><span>Stage</span><strong>{{ stageLabel(ticket.stage) }}</strong></div>
+          <div><span>Priority</span><strong>{{ ticket.priority || 'Not recorded' }}</strong></div>
+          <div><span>Age</span><strong>{{ ageLabel(ticket.inAt) }}</strong></div>
+          <div><span>Partner</span><strong>{{ ticket.partner || 'Not assigned' }}</strong></div>
+          <div><span>Estimate</span><strong>{{ ticket.cost === null ? 'Not recorded' : '₹' + ticket.cost.toLocaleString('en-IN') }}</strong></div>
+          <div><span>Turnaround</span><strong>{{ ticket.requestedTurnaround || 'Not recorded' }}</strong></div>
+          <div><span>Coverage</span><strong>{{ coverageLabel(ticket) }}</strong></div>
+          <div><span>Escalation</span><strong>7-day alert · contract tier unavailable</strong></div>
+        </section>
+
+        <section class="repair-detail-section">
+          <h3>Device &amp; fault</h3>
+          <dl>
+            <div><dt>Manufacturer / model</dt><dd>{{ ticket.manufacturer || 'Not recorded' }} {{ ticket.model }}</dd></div>
+            <div><dt>Serial / asset</dt><dd>{{ ticket.serialNumber || 'Not recorded' }} · {{ ticket.assetNumber || 'Not recorded' }}</dd></div>
+            <div><dt>Location</dt><dd>{{ ticket.location || 'Not recorded' }}</dd></div>
+            <div><dt>Service / scope</dt><dd>{{ ticket.serviceType || 'Not recorded' }} · {{ ticket.repairScope || 'Not recorded' }}</dd></div>
+            <div><dt>Parent job</dt><dd>Not linked in repair data</dd></div>
+            <div><dt>Fault code / details</dt><dd>{{ ticket.fault || 'Not recorded' }}</dd></div>
+            <div><dt>Symptoms</dt><dd>{{ ticket.symptoms || 'Not recorded' }}</dd></div>
+            <div><dt>Received</dt><dd>{{ dateLabel(ticket.inAt) }}</dd></div>
+            <div><dt>Last updated</dt><dd>{{ dateLabel(ticket.updatedAt) }}</dd></div>
+          </dl>
+        </section>
+
+        <section class="repair-detail-section">
+          <h3>Workflow activity</h3>
+          @if (ticket.history.length) {
+            <ol class="repair-history">
+              @for (event of ticket.history; track $index) {
+                <li>
+                  <strong>{{ statusLabel(event.status) }}</strong>
+                  <span>{{ dateLabel(event.at) }}</span>
+                  @if (event.remarks) { <p>{{ event.remarks }}</p> }
+                </li>
+              }
+            </ol>
+          } @else {
+            <p class="repair-muted">No status changes have been recorded.</p>
+          }
+        </section>
+
+        @if (auth.canAccess('repair', 'edit')) {
+          <section class="repair-detail-section">
+            <h3>Diagnosis &amp; quote</h3>
+            <div class="repair-form-grid">
+              <label>
+                Estimated cost
+                <input type="number" min="1" [value]="estimatedCost() ?? ''" (input)="onEstimatedCost($event)" placeholder="₹">
+              </label>
+              <label class="repair-approval-check">
+                <input type="checkbox" [checked]="quoteApproved()" (change)="onQuoteApproval($event)">
+                Customer approved quote
+              </label>
+            </div>
+          </section>
+        }
+
+        <section class="repair-detail-section">
+          <h3>Field partner assignment</h3>
+          @if (auth.canAccess('repair', 'edit')) {
+            <div class="repair-form-grid">
+              <label>
+                Verified service / repair partner
+                <select [value]="benchPartnerId()" (change)="onBenchPartner($event)">
+                  <option value="">Unassigned</option>
+                  @for (partner of benchPartners(); track partner.id) {
+                    <option [value]="partner.id">
+                      {{ partner.name }} · {{ partner.online ? 'Online' : 'Offline' }} · {{ partnerLoad(partner.id) }} active repairs
+                    </option>
+                  }
+                </select>
+              </label>
+            </div>
+            <div class="repair-partner-actions">
+              <button type="button" class="repair-stage-button" (click)="saveBenchAssignment(ticket)" [disabled]="saving()">Save assignment</button>
+              @if (recommendedPartner(ticket); as recommended) {
+                <button type="button" class="repair-stage-button" (click)="assignRecommendedPartner(ticket)" [disabled]="saving()">
+                  Assign best match · {{ recommended.name }}
+                </button>
+              }
+            </div>
+            <small class="repair-muted">Suggestion ranks verified partners by device specialization, online state, and active repair load. Location data is unavailable, so nearest-partner ranking is not enabled.</small>
+          } @else {
+            <p class="repair-muted">You do not have permission to change partner assignments.</p>
+          }
+          <p class="repair-muted"><strong>Disputes:</strong> Repair-linked complaints are not available in the connected disputes data.</p>
+        </section>
+
+        <section class="repair-detail-section">
+          <h3>Inventory &amp; parts</h3>
+          @if (auth.canAccess('repair', 'edit') && auth.canAccess('inventory')) {
+            <div class="repair-parts-picker">
+              <label>
+                Spare part
+                <select [value]="selectedPartSku()" (change)="onPartSku($event)">
+                  <option value="">Select inventory part</option>
+                  @for (part of ops.inventory; track part.sku) {
+                    <option [value]="part.sku">
+                      {{ part.name }} · {{ part.stock }} in stock ·
+                      {{ inventoryStatus(part) === 'in-stock' ? 'In stock' : inventoryStatus(part) === 'low-stock' ? 'Low stock' : 'Out of stock' }}
+                    </option>
+                  }
+                </select>
+              </label>
+              <label>
+                Quantity
+                <input type="number" min="1" [value]="selectedPartQuantity()" (input)="onPartQuantity($event)">
+              </label>
+              <button type="button" class="repair-stage-button" (click)="addSelectedPart()" [disabled]="!selectedPartSku()">Add to repair plan</button>
+              <button type="button" class="repair-stage-button" (click)="requestSelectedPart(ticket)" [disabled]="!selectedPartSku() || saving()">
+                {{ saving() ? 'Saving…' : 'Request part' }}
+              </button>
+            </div>
+            @if (spareParts().length) {
+              <div class="repair-selected-parts">
+                @for (part of spareParts(); track part.sku) {
+                  <span>
+                    {{ part.name }} × {{ part.quantity }} ·
+                    @if (inventoryItem(part.sku); as stockItem) {
+                      {{ inventoryStatus(stockItem) === 'in-stock' ? 'In stock' : inventoryStatus(stockItem) === 'low-stock' ? 'Low stock' : 'Out of stock' }}
+                    } @else { Stock unavailable }
+                    <button type="button" (click)="removeSelectedPart(part.sku)" aria-label="Remove {{ part.name }}">×</button>
+                  </span>
+                }
+              </div>
+            }
+            @if (ticket.partRequests?.length) {
+              <div class="repair-selected-parts" aria-label="Part requests">
+                <strong>Part requests</strong>
+                @for (request of ticket.partRequests; track $index) {
+                  <span>{{ request.name }} × {{ request.quantity }}
+                    <b class="repair-row-badge"
+                      [class.repair-amc-badge]="request.status === 'issued'"
+                      [class.repair-parts-badge]="request.status === 'requested'">
+                      {{ request.status === 'issued' ? 'Issued' : 'Requested' }}
+                    </b>
+                  </span>
+                }
+              </div>
+            }
+            <small class="repair-muted">Requests are recorded for procurement; inventory is only deducted when repair starts and selected parts are issued.</small>
+          } @else {
+            <p class="repair-muted">Inventory actions require repair edit and inventory access.</p>
+          }
+        </section>
+
+        <section class="repair-detail-section">
+          <h3>Finance &amp; service records</h3>
+          <p class="repair-muted"><strong>Invoices:</strong> Invoice generation and repair-linked payment status are not connected. No invoice will be marked generated automatically.</p>
+          <p class="repair-muted"><strong>Analytics:</strong> Repair lifecycle and turnaround records feed shared analytics when history is available.</p>
+        </section>
+
+        <section class="repair-detail-section repair-data-limits">
+          <h3>Workshop record</h3>
+          <p>Workshop assignments and part requests are stored in the repair audit history. Gate-pass documents and QC photos remain unavailable unless a document store is connected.</p>
+        </section>
+
+        @if (auth.canAccess('repair', 'edit')) {
+          <section class="repair-detail-section repair-workflow-action">
+            <h3>Next workflow action</h3>
+            <p>{{ nextActionLabel(ticket) }}</p>
+            @if (nextStage(ticket); as targetStage) {
+              @if (targetStage === 'quote_approval') {
+                <small>The estimate is stored in the repair history; this action marks it as awaiting customer approval.</small>
+              }
+              <label for="repair-transition-remarks">Transition note{{ targetStage === 'qc_passed' ? ' (required for QC)' : '' }}</label>
+              <textarea
+                id="repair-transition-remarks"
+                rows="3"
+                maxlength="500"
+                [value]="remarks()"
+                (input)="onRemarksChange($event)"
+                placeholder="Add context for the status history"
+              ></textarea>
+              @if (targetStage === 'qc_passed') {
+                <small>Enter the QC result. This note is audited; the checklist and test photo are not stored by the current system.</small>
+              }
+              <button type="button" [disabled]="saving()" (click)="advanceStage(ticket)">
+                {{ saving() ? 'Saving…' : nextActionLabel(ticket) }}
+              </button>
+            }
+          </section>
+        }
+      </div>
+    </aside>
+  </div>
+}

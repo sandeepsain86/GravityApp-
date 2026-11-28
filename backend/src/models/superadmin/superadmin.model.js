@@ -1,11 +1,4 @@
-const { Pool } = require('pg');
-
-let pool;
-
-function db() {
-  if (!pool) pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
-  return pool;
-}
+const { pool } = require('../../config/postgres');
 
 function present(row, withPassword) {
   if (!row) return null;
@@ -20,12 +13,12 @@ function present(row, withPassword) {
 }
 
 async function findByEmail(email, withPassword = false) {
-  const { rows } = await db().query('SELECT * FROM superadmins WHERE email = $1', [email]);
+  const { rows } = await pool.query('SELECT * FROM superadmins WHERE email = $1', [email]);
   return present(rows[0], withPassword);
 }
 
 async function create({ name, email, password }) {
-  const { rows } = await db().query(
+  const { rows } = await pool.query(
     `INSERT INTO superadmins (name, email, password)
      VALUES ($1, $2, $3)
      RETURNING *`,

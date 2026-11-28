@@ -32,11 +32,6 @@ interface ImpersonationExchangeResponse {
   impersonation: ImpersonationContext;
 }
 
-interface LocalDemoResponse {
-  enabled: boolean;
-  credentials?: { email: string; password: string };
-}
-
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly http = inject(HttpClient);
@@ -162,13 +157,6 @@ export class AuthService {
         message: this.getErrorMessage(error, 'Could not connect to the authentication service.'),
       };
     }
-  }
-
-  async getLocalDemoCredentials(): Promise<{ email: string; password: string } | null> {
-    const response = await firstValueFrom(
-      this.http.get<LocalDemoResponse>(`${API_PREFIX}/auth/local-demo`),
-    );
-    return response.enabled ? response.credentials ?? null : null;
   }
 
   async logout(): Promise<void> {

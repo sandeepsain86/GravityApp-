@@ -1,5 +1,8 @@
+const { publicUrl } = require('../../config/shared');
+
 function toPublicUser(row, extras = {}) {
   if (!row) return null;
+  const avatarUrl = row.avatar_url || null;
   return {
     id: row.id,
     name: row.name || null,
@@ -13,7 +16,7 @@ function toPublicUser(row, extras = {}) {
     companyId: row.company_id || null,
     emailVerified: Boolean(row.email_verified),
     phoneVerified: Boolean(row.phone_verified),
-    avatarUrl: row.avatar_url || null,
+    avatarUrl: avatarUrl && !/^https?:\/\//i.test(avatarUrl) ? publicUrl(avatarUrl) : avatarUrl,
     onboardingStatus: extras.onboardingStatus || null,
     lastLoginAt: row.last_login_at || null,
     createdAt: row.created_at,

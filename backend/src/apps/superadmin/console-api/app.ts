@@ -13,13 +13,73 @@ export interface AppOptions {
   sessions: SessionManager;
   frontendOrigins: string[];
   secureCookies: boolean;
-  localDemoCredentials?: { email: string; password: string } | null;
   platformDirectory?: {
     listRegistrations(): Promise<PlatformRegistration[]>;
     getRegistrationDetails(id: string): Promise<PlatformRegistrationDetails | null>;
   };
   operationsDirectory?: {
     getData(domain: string): Promise<unknown>;
+    transitionRepairStage?(
+      reference: string,
+      stage: string,
+      remarks: string,
+      details: Record<string, unknown>,
+      actor: import('./domain/models.js').StoredUser,
+    ): Promise<{
+      id: string;
+      ticketNumber: string;
+      status: string;
+      stage: string;
+      fromStatus: string;
+      updatedAt: string;
+    }>;
+    updateRepairWorkshop?(
+      reference: string,
+      changes: {
+        benchPartnerId?: string | null;
+        partRequest?: { sku: string; quantity: number };
+      },
+      actor: import('./domain/models.js').StoredUser,
+    ): Promise<{
+      id: string;
+      ticketNumber: string;
+      status: string;
+      stage: string;
+      fromStatus: string;
+      updatedAt: string;
+    }>;
+    assignRepairPartnerToMany?(
+      references: string[],
+      partnerId: string,
+      actor: import('./domain/models.js').StoredUser,
+    ): Promise<{
+      partnerId: string;
+      partnerName: string;
+      repairs: Array<{
+        id: string;
+        ticketNumber: string;
+        status: string;
+        stage: string;
+        fromStatus: string;
+        updatedAt: string;
+      }>;
+    }>;
+    transitionProjectStatus?(
+      reference: string,
+      status: string,
+      note: string,
+      actor: import('./domain/models.js').StoredUser,
+    ): Promise<{ id: string; request_number: string; status: string; updated_at: string }>;
+    createProjectMilestone?(
+      reference: string,
+      input: Record<string, unknown>,
+      actor: import('./domain/models.js').StoredUser,
+    ): Promise<Record<string, unknown>>;
+    updateProjectMilestone?(
+      reference: string,
+      milestoneId: string,
+      input: Record<string, unknown>,
+    ): Promise<Record<string, unknown>>;
   };
 }
 

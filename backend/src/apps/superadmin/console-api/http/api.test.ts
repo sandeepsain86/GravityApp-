@@ -5,44 +5,232 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import test from 'node:test';
 import type { AddressInfo } from 'node:net';
+import type { PlatformRegistrationDetails } from '../domain/models.js';
 import { createApp } from '../app.js';
 import { JsonStore } from '../infrastructure/json-store.js';
 import { AccessControlService } from '../services/access-control.js';
 import { AuthenticationService } from '../services/authentication.js';
 import { hashPassword } from '../services/passwords.js';
-import { SessionManager } from '../services/sessions.js';
-import { isLoopbackAddress } from './routes.js';
+import {
+  SessionManager,
+  type Session,
+  type SessionImpersonation,
+  type SessionRepository,
+} from '../services/sessions.js';
 
-test('local demo access recognizes loopback addresses only', () => {
-  assert.equal(isLoopbackAddress('127.0.0.1'), true);
-  assert.equal(isLoopbackAddress('::1'), true);
-  assert.equal(isLoopbackAddress('::ffff:127.0.0.1'), true);
-  assert.equal(isLoopbackAddress('192.168.1.10'), false);
-  assert.equal(isLoopbackAddress(undefined), false);
-});
+class SharedTestSessionRepository implements SessionRepository {
+  private readonly sessions = new Map<string, { userId: string; session: Session }>();
+  private readonly launches = new Map<string, {
+    actorId: string;
+    targetId: string;
+    reason: string;
+    actorSessionHash: string;
+    expiresAt: number;
+  }>();
 
+  async createSession(tokenHash: string, userId: string, expiresAt: number): Promise<boolean> {
+    this.revokeUserSessionsSync(userId);
+    this.sessions.set(tokenHash, { userId, session: { userId, expiresAt } });
+    return true;
+  }
+
+  async createImpersonationSession(
+    tokenHash: string,
+    userId: string,
+    impersonatedBy: SessionImpersonation,
+    actorSessionHash: string,
+    expiresAt: number,
+  ): Promise<boolean> {
+    const actor = this.sessions.get(actorSessionHash);
+    if (!actor || actor.userId !== impersonatedBy.id ||
+        actor.session.expiresAt <= Date.now() || actor.session.impersonatedBy) return false;
+    this.sessions.set(tokenHash, {
+      userId,
+      session: { userId, expiresAt, impersonatedBy, actorSessionHash },
+    });
+    return true;
+  }
+
+  async getSession(tokenHash: string): Promise<Session | undefined> {
+    const entry = this.sessions.get(tokenHash);
+    if (!entry || entry.session.expiresAt <= Date.now() ||
+        (entry.session.actorSessionHash && !this.sessions.has(entry.session.actorSessionHash))) {
+      this.sessions.delete(tokenHash);
+      return undefined;
+    }
+    return structuredClone(entry.session);
+  }
+
+  async createLaunch(
+    tokenHash: string,
+    actorId: string,
+    targetId: string,
+    reason: string,
+    actorSessionHash: string,
+    expiresAt: number,
+  ): Promise<boolean> {
+    const actor = this.sessions.get(actorSessionHash);
+    if (!actor || actor.userId !== actorId || actor.session.expiresAt <= Date.now() ||
+        actor.session.impersonatedBy) return false;
+    this.launches.set(tokenHash, { actorId, targetId, reason, actorSessionHash, expiresAt });
+    return true;
+  }
+
+  async consumeLaunch(tokenHash: string) {
+    const launch = this.launches.get(tokenHash);
+    const actor = launch ? this.sessions.get(launch.actorSessionHash) : undefined;
+    if (!launch || launch.expiresAt <= Date.now() ||
+        !actor ||
+        actor.userId !== launch.actorId || actor.session.expiresAt <= Date.now() ||
+        actor.session.impersonatedBy) return undefined;
+    this.launches.delete(tokenHash);
+    return {
+      actorId: launch.actorId,
+      targetId: launch.targetId,
+      reason: launch.reason,
+      expiresAt: launch.expiresAt,
+      actorSessionHash: launch.actorSessionHash,
+    };
+  }
+
+  async revokeSession(tokenHash: string): Promise<void> {
+    this.sessions.delete(tokenHash);
+    this.deleteLaunchesForMissingActors();
+  }
+
+  async revokeUserSessions(userId: string): Promise<void> {
+    this.revokeUserSessionsSync(userId);
+  }
+
+  async revokeOtherSessions(userId: string, exceptTokenHash: string): Promise<void> {
+    for (const [hash, entry] of this.sessions) {
+      if (entry.userId === userId && hash !== exceptTokenHash) this.sessions.delete(hash);
+    }
+    this.deleteLaunchesForMissingActors();
+  }
+
+  async revokeUserAccess(userId: string): Promise<void> {
+    for (const [hash, entry] of this.sessions) {
+      if (entry.userId === userId || entry.session.impersonatedBy?.id === userId) {
+        this.sessions.delete(hash);
+      }
+    }
+    for (const [hash, launch] of this.launches) {
+      if (launch.targetId === userId) this.launches.delete(hash);
+    }
+    this.deleteLaunchesForMissingActors();
+  }
+
+  private revokeUserSessionsSync(userId: string): void {
+    for (const [hash, entry] of this.sessions) {
+      if (entry.userId === userId) this.sessions.delete(hash);
+    }
+    this.deleteLaunchesForMissingActors();
+  }
+
+  private deleteLaunchesForMissingActors(): void {
+    for (const [hash, launch] of this.launches) {
+      if (!this.sessions.has(launch.actorSessionHash)) this.launches.delete(hash);
+    }
+  }
+}
+
+function createTestSessionManager(repository = new SharedTestSessionRepository()): SessionManager {
+  return new SessionManager(repository);
+}
 test('API protects user administration and audits denied access', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'energy-hub-api-'));
   const store = new JsonStore(join(directory, 'access-control.json'));
   const superadminPassword = 'Superadmin-password-123';
   const superadminCredentials = hashPassword(superadminPassword);
-  const demoPassword = 'Local-demo-password-123';
-  const demoCredentials = hashPassword(demoPassword);
   await store.initialize({
     email: 'root@example.com',
     name: 'Root User',
     passwordSalt: superadminCredentials.salt,
     passwordHash: superadminCredentials.hash,
   });
-  await store.ensureLocalDemoSuperadmin({
-    name: 'Local Demo Superadmin',
-    email: 'demo-admin@localhost.test',
-    passwordSalt: demoCredentials.salt,
-    passwordHash: demoCredentials.hash,
-  });
-
   const access = new AccessControlService(store);
   const root = (await store.getUserByEmail('root@example.com'))!;
+  const assignmentCalls: Array<{ reference: string; partnerId: string | null; actorId: string }> = [];
+  const projectWorkflowCalls: Array<{ action: string; reference: string; actorId?: string }> = [];
+  const trackingDetails: PlatformRegistrationDetails = {
+    registration: {
+      id: 'energy-hub:1',
+      registrationId: 'EN-PARTNER-10001',
+      app: 'energy-hub',
+      name: 'Sample Partner',
+      email: null,
+      phone: null,
+      role: 'service_partner',
+      status: 'approved',
+      registeredAt: null,
+      profile: {
+        businessName: null,
+        companyName: null,
+        registeredAddress: null,
+        serviceAreas: [],
+        specializations: [],
+        experienceYears: null,
+        qualification: null,
+        online: true,
+        busy: false,
+        completedServices: 0,
+        totalServices: 0,
+        totalEarnings: null,
+        pendingEarnings: null,
+        rating: null,
+        ratingCount: null,
+        ratings: [],
+        latestService: null,
+      },
+    },
+    account: {
+      avatarUrl: null,
+      secondaryPhone: null,
+      emailVerified: null,
+      phoneVerified: null,
+      lastLoginAt: null,
+      updatedAt: null,
+      currentWork: {
+        id: '1',
+        reference: 'JOB-1',
+        title: 'Sample service',
+        stage: 'checked_in',
+        site: 'Sample site',
+        startedAt: null,
+        checkedInAt: null,
+        lastLocationUpdateAt: new Date().toISOString(),
+        liveLocation: { latitude: 18.52, longitude: 73.85 },
+        distanceKm: null,
+        travelEtaMinutes: null,
+      },
+      partnerSince: null,
+      travelRadiusKm: null,
+      onboarding: null,
+      payoutProfileConfigured: null,
+      vehicleVerification: null,
+      companies: [],
+      sites: [],
+      devices: [],
+      documents: [],
+    },
+    activity: [],
+    statusBreakdown: [],
+    monthlyActivity: [],
+    financialSummary: {
+      kind: 'payouts',
+      total: 0,
+      paid: 0,
+      pending: 0,
+      failed: 0,
+      commission: 0,
+      deductions: 0,
+      count: 0,
+    },
+    earnings: [],
+    orders: [],
+    supportRequests: [],
+  };
   const restrictedSuperadminPassword = 'Scoped-superadmin-password-123';
   const restrictedSuperadmin = await access.createUser({
     name: 'Scoped Superadmin',
@@ -100,13 +288,9 @@ test('API protects user administration and audits denied access', async () => {
     store,
     access,
     authentication: new AuthenticationService(store),
-    sessions: new SessionManager(),
+    sessions: createTestSessionManager(),
     frontendOrigins: ['http://localhost:4200'],
     secureCookies: false,
-    localDemoCredentials: {
-      email: 'demo-admin@localhost.test',
-      password: demoPassword,
-    },
     platformDirectory: {
       async listRegistrations() {
         return [{
@@ -140,13 +324,44 @@ test('API protects user administration and audits denied access', async () => {
           },
         }];
       },
-      async getRegistrationDetails() {
-        return null;
+      async getRegistrationDetails(id: string) {
+        return id === trackingDetails.registration.id ? trackingDetails : null;
       },
     },
     operationsDirectory: {
       async getData(domain: string) {
         return { items: [], sourceStatus: 'connected', domain };
+      },
+      async assignJob(reference: string, partnerId: string | null, actor) {
+        assignmentCalls.push({ reference, partnerId, actorId: actor.id });
+        if (reference === 'CONFLICT') {
+          throw Object.assign(new Error('Partner became unavailable.'), { statusCode: 409 });
+        }
+        return {
+          changed: true,
+          jobId: '41',
+          reference,
+          partnerId,
+          partnerName: partnerId ? 'Asha Sharma' : undefined,
+          assignedAt: partnerId ? '2026-03-01T10:00:00.000Z' : undefined,
+        };
+      },
+      async transitionProjectStatus(reference, status, note, actor) {
+        projectWorkflowCalls.push({ action: `status:${status}:${note}`, reference, actorId: actor.id });
+        return {
+          id: 'project-1',
+          request_number: reference,
+          status,
+          updated_at: '2026-03-01T10:00:00.000Z',
+        };
+      },
+      async createProjectMilestone(reference, input, actor) {
+        projectWorkflowCalls.push({ action: 'milestone:create', reference, actorId: actor.id });
+        return { id: 'milestone-1', title: input['title'], due_date: input['dueDate'] };
+      },
+      async updateProjectMilestone(reference, milestoneId, input) {
+        projectWorkflowCalls.push({ action: `milestone:update:${milestoneId}:${String(input['status'] ?? '')}`, reference });
+        return { id: milestoneId, status: input['status'], client_signoff_status: input['clientSignoffStatus'] };
       },
     },
   });
@@ -156,16 +371,6 @@ test('API protects user administration and audits denied access', async () => {
   const baseUrl = `http://127.0.0.1:${address.port}/api`;
 
   try {
-    const demoInfo = await fetch(`${baseUrl}/auth/local-demo`);
-    assert.equal(demoInfo.status, 200);
-    assert.deepEqual(await demoInfo.json(), {
-      enabled: true,
-      credentials: {
-        email: 'demo-admin@localhost.test',
-        password: demoPassword,
-      },
-    });
-
     const anonymousSession = await fetch(`${baseUrl}/auth/me`);
     assert.equal(anonymousSession.status, 200);
     assert.deepEqual(await anonymousSession.json(), { user: null, expiresAt: null });
@@ -197,6 +402,70 @@ test('API protects user administration and audits denied access', async () => {
       sourceStatus: 'connected',
       domain: 'jobs',
     });
+    const savedAssignment = await fetch(`${baseUrl}/admin/operations/jobs/JOB-41/assignment`, {
+      method: 'PATCH',
+      headers: { cookie: rootCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ partnerId: '17' }),
+    });
+    assert.equal(savedAssignment.status, 200);
+    assert.equal(assignmentCalls.at(-1)?.reference, 'JOB-41');
+    assert.equal(assignmentCalls.at(-1)?.partnerId, '17');
+    assert.equal(assignmentCalls.at(-1)?.actorId, root.id);
+    const assignmentAudit = (await store.listAuditEvents())
+      .find((event) => event.action === 'jobs.partner_assigned');
+    assert.equal(assignmentAudit?.actorId, root.id);
+    assert.equal(assignmentAudit?.targetId, 'JOB-41');
+
+    const projectStatus = await fetch(`${baseUrl}/admin/operations/projects/PRJ-1/status`, {
+      method: 'PATCH',
+      headers: { cookie: rootCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'under_review', note: 'Review started' }),
+    });
+    assert.equal(projectStatus.status, 200);
+    assert.deepEqual(projectWorkflowCalls[0], {
+      action: 'status:under_review:Review started',
+      reference: 'PRJ-1',
+      actorId: root.id,
+    });
+    const projectStatusAudit = (await store.listAuditEvents())
+      .find((event) => event.action === 'projects.status_changed');
+    assert.equal(projectStatusAudit?.targetId, 'PRJ-1');
+
+    const createdMilestone = await fetch(`${baseUrl}/admin/operations/projects/PRJ-1/milestones`, {
+      method: 'POST',
+      headers: { cookie: rootCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Install equipment', dueDate: '2026-03-15' }),
+    });
+    assert.equal(createdMilestone.status, 201);
+    assert.equal(projectWorkflowCalls[1]?.actorId, root.id);
+
+    const viewerProjectUpdate = await fetch(`${baseUrl}/admin/operations/projects/PRJ-1/status`, {
+      method: 'PATCH',
+      headers: { cookie: await login('viewer@example.com', 'Viewer-password-123'), 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'under_review' }),
+    });
+    assert.equal(viewerProjectUpdate.status, 403);
+
+    const invalidAssignment = await fetch(`${baseUrl}/admin/operations/jobs/JOB-41/assignment`, {
+      method: 'PATCH',
+      headers: { cookie: rootCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ partnerId: 17 }),
+    });
+    assert.equal(invalidAssignment.status, 400);
+    const conflictingAssignment = await fetch(`${baseUrl}/admin/operations/jobs/CONFLICT/assignment`, {
+      method: 'PATCH',
+      headers: { cookie: rootCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ partnerId: '17' }),
+    });
+    assert.equal(conflictingAssignment.status, 409);
+    const jobAssignmentViewerCookie = await login('viewer@example.com', 'Viewer-password-123');
+    const deniedAssignment = await fetch(`${baseUrl}/admin/operations/jobs/JOB-41/assignment`, {
+      method: 'PATCH',
+      headers: { cookie: jobAssignmentViewerCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ partnerId: '17' }),
+    });
+    assert.equal(deniedAssignment.status, 403);
+
     const revokedRootCookie = rootCookie;
     const rootOtherSessionCookie = await login('root@example.com', superadminPassword);
     rootCookie = rootOtherSessionCookie;
@@ -461,12 +730,6 @@ test('API protects user administration and audits denied access', async () => {
     );
     assert.equal(broaderUserGrant.status, 400);
 
-    const demoCookie = await login('demo-admin@localhost.test', demoPassword);
-    const demoUsers = await fetch(`${baseUrl}/admin/users`, {
-      headers: { cookie: demoCookie },
-    });
-    assert.equal(demoUsers.status, 200);
-
     const allowed = await fetch(`${baseUrl}/admin/users`, {
       headers: { cookie: rootCookie },
     });
@@ -476,6 +739,13 @@ test('API protects user administration and audits denied access', async () => {
     assert.equal(new Set(listedUsers.map((user) => user.userCode)).size, listedUsers.length);
 
     const viewer = (await store.getUserByEmail('viewer@example.com'))!;
+    const unauthenticatedLaunch = await fetch(`${baseUrl}/admin/users/${viewer.id}/impersonation`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(unauthenticatedLaunch.status, 401);
+
     const launchResponse = await fetch(`${baseUrl}/admin/users/${viewer.id}/impersonation`, {
       method: 'POST',
       headers: { cookie: rootCookie, 'content-type': 'application/json' },
@@ -489,7 +759,7 @@ test('API protects user administration and audits denied access', async () => {
 
     const exchange = await fetch(`${baseUrl}/auth/impersonation/exchange`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token: launch.launchToken }),
     });
     assert.equal(exchange.status, 200);
@@ -561,6 +831,9 @@ test('API protects user administration and audits denied access', async () => {
       .find((event) => event.action === 'auth.impersonation_started');
     assert.equal(startAudit?.actorId, root.id);
     assert.equal(startAudit?.targetId, viewer.id);
+    assert.equal(startAudit?.details.reason, 'Superadmin initiated user-panel access');
+    assert.ok((await store.listAuditEvents()).some((event) =>
+      event.action === 'auth.impersonation_ended' && event.actorId === root.id));
 
     const selfLaunch = await fetch(`${baseUrl}/admin/users/${root.id}/impersonation`, {
       method: 'POST',
@@ -575,6 +848,21 @@ test('API protects user administration and audits denied access', async () => {
     assert.equal(registrations.status, 200);
     assert.equal((await registrations.json() as { registrations: Array<{ registrationId: string }> })
       .registrations[0].registrationId, 'EN-PARTNER-10001');
+    const trackingAccess = await fetch(
+      `${baseUrl}/admin/registrations/energy-hub%3A1/tracking-access`,
+      {
+        method: 'POST',
+        headers: { cookie: rootCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      },
+    );
+    assert.equal(trackingAccess.status, 200);
+    const trackingAudit = (await store.listAuditEvents())
+      .find((event) => event.action === 'livemonitor.tracking_profile_opened');
+    assert.equal(trackingAudit?.actorId, root.id);
+    assert.equal(trackingAudit?.targetId, 'energy-hub:1');
+    assert.equal(trackingAudit?.details.liveLocationAvailable, true);
+    assert.equal('latitude' in (trackingAudit?.details ?? {}), false);
     const missingProfile = await fetch(`${baseUrl}/admin/registrations/energy-hub%3A999`, {
       headers: { cookie: rootCookie },
     });
@@ -603,6 +891,11 @@ test('API protects user administration and audits denied access', async () => {
       headers: { cookie: viewerCookie },
     });
     assert.equal(deniedProfile.status, 403);
+    const deniedTrackingAccess = await fetch(
+      `${baseUrl}/admin/registrations/energy-hub%3A1/tracking-access`,
+      { method: 'POST', headers: { cookie: viewerCookie, 'content-type': 'application/json' }, body: '{}' },
+    );
+    assert.equal(deniedTrackingAccess.status, 403);
 
     permissions.viewer.users.view = true;
     permissions.viewer.users.create = true;
@@ -781,6 +1074,7 @@ test('API protects user administration and audits denied access', async () => {
     assert.ok(auditActions.includes('company.profile_updated'));
     assert.ok(auditActions.includes('auth.password_changed'));
     assert.ok(auditActions.includes('auth.password_change_failed'));
+    assert.equal(JSON.stringify(await store.listAuditEvents()).includes(superadminPassword), false);
   } finally {
     server.close();
     await once(server, 'close');
@@ -788,7 +1082,7 @@ test('API protects user administration and audits denied access', async () => {
   }
 });
 
-test('local demo credentials are not returned when the feature is disabled', async () => {
+test('local demo login endpoint does not exist', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'energy-hub-api-no-demo-'));
   const store = new JsonStore(join(directory, 'access-control.json'));
   const credentials = hashPassword('Superadmin-password-123');
@@ -802,7 +1096,7 @@ test('local demo credentials are not returned when the feature is disabled', asy
     store,
     access: new AccessControlService(store),
     authentication: new AuthenticationService(store),
-    sessions: new SessionManager(),
+    sessions: createTestSessionManager(),
     frontendOrigins: ['http://localhost:4200'],
     secureCookies: false,
   });
@@ -812,11 +1106,57 @@ test('local demo credentials are not returned when the feature is disabled', asy
 
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/api/auth/local-demo`);
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { enabled: false });
+    assert.equal(response.status, 404);
   } finally {
     server.close();
     await once(server, 'close');
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('session validation, revocation, and one-time launch consumption are shared across manager instances', async () => {
+  const repository = new SharedTestSessionRepository();
+  const firstInstance = createTestSessionManager(repository);
+  const secondInstance = createTestSessionManager(repository);
+  const actor = await firstInstance.create('shared-superadmin');
+
+  assert.equal((await secondInstance.get(actor.id))?.userId, 'shared-superadmin');
+  const launch = await firstInstance.createImpersonationLaunch(
+    'shared-superadmin',
+    'target-user',
+    actor.id,
+    'Investigate the user reported issue',
+  );
+  const consumed = await Promise.all([
+    firstInstance.consumeImpersonationLaunch(launch.token),
+    secondInstance.consumeImpersonationLaunch(launch.token),
+  ]);
+  assert.equal(consumed.filter(Boolean).length, 1);
+  const consumedLaunch = consumed.find((entry) => entry);
+  assert.ok(consumedLaunch);
+  const expiringLaunch = await firstInstance.createImpersonationLaunch(
+    'shared-superadmin',
+    'target-user',
+    actor.id,
+    'Check an account issue',
+  );
+  const currentTime = Date.now;
+  Date.now = () => expiringLaunch.expiresAt + 1;
+  try {
+    assert.equal(
+      await secondInstance.consumeImpersonationLaunch(expiringLaunch.token),
+      undefined,
+    );
+  } finally {
+    Date.now = currentTime;
+  }
+
+  const impersonation = await secondInstance.createImpersonationSession(
+    'target-user',
+    { id: 'shared-superadmin', name: 'Root User', email: 'root@example.com' },
+    consumedLaunch.actorSessionHash,
+  );
+  assert.equal((await firstInstance.get(impersonation.id))?.userId, 'target-user');
+  await firstInstance.revoke(actor.id);
+  assert.equal(await secondInstance.get(impersonation.id), undefined);
 });

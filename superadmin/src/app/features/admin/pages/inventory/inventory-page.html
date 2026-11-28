@@ -7,18 +7,22 @@
 
 <div class="stat-row">
   <div class="stat-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="box" aria-hidden="true"></span></div>
     <div class="stat-num">{{ ops.inventory.length }}</div>
     <div class="stat-lbl">Total SKUs</div>
   </div>
   <div class="stat-card low-stock-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="warn" aria-hidden="true"></span></div>
     <div class="stat-num">{{ ops.lowStockItems().length }}</div>
     <div class="stat-lbl">Low Stock</div>
   </div>
   <div class="stat-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="box" aria-hidden="true"></span></div>
     <div class="stat-num">{{ ops.inventory.reduce((n, i) => n + i.stock, 0) }}</div>
     <div class="stat-lbl">Units In Stock</div>
   </div>
   <div class="stat-card">
+    <div class="stat-top"><span class="kpi-stat-icon menu-icon" data-icon="building" aria-hidden="true"></span></div>
     <div class="stat-num">{{ ops.inventorySuppliers() }}</div>
     <div class="stat-lbl">Suppliers</div>
   </div>
